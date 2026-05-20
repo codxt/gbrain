@@ -1,6 +1,11 @@
 # TODOS
 
 
+## v0.40.0.1 NESTED_QUOTES validator follow-up
+
+- [ ] **v0.40.x+: unify `serializeFrontmatter` tag/title quoting with `brain-writer.ts:184`'s single-quote-with-`''`-escape style for consistency.** Cosmetic only now that the validator at `src/core/markdown.ts:219-238` is YAML-aware (v0.40.0.1). Today the emitter still produces `tags: ["yc"]` (double-quoted via `JSON.stringify`) while the repair path produces `tags: ['yc']` (single-quoted). Both are valid YAML and the validator accepts both, so this is cosmetic — but new writes drifting from repair-side output reads as inconsistency. Original signal: PR #1217 by @garrytan-agents (closed in favor of the validator fix). Touch `src/core/frontmatter-inference.ts:391-416` only; should be ~5 LOC + the existing test at `test/frontmatter-inference.test.ts:239` updated.
+
+
 ## v0.35.6.0 floor-ratio gate follow-ups (v0.36.x+)
 
 - [ ] **v0.36.x: Run gbrain-side floor-ratio ablation before flipping any mode-bundle default.** v0.35.6.0 ships the gate default-off (`MODE_BUNDLES[*].floor_ratio = undefined`) because the SkyTwin labeled-retrieval ablation that surfaced the regression isn't reproducible on gbrain's own eval surfaces from outside. Before any mode-bundle default flip, run the gate at `floor_ratio: undefined`, 0.85, 0.90, 0.95 across `gbrain eval longmemeval`, `gbrain eval whoknows`, `gbrain eval suspected-contradictions`, and the BrainBench-Real replay (sibling gbrain-evals repo). Quantify per-mode P@k / R@k / nDCG@k / top-1 stability deltas. Look for: regression on queries that genuinely need the long-tail boost (specific entity lookups, low-frequency topics) vs improvement on queries where weak-overlap pages were leapfrogging. The corpus-level finding determines whether tokenmax (most exposure to the failure mode) should flip first, or whether the gate stays a per-call opt-in indefinitely. Filed during v0.35.6.0 codex outside-voice review.
