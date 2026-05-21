@@ -409,20 +409,27 @@ CREATE INDEX IF NOT EXISTS idx_subagent_messages_job ON subagent_messages (job_i
 CREATE INDEX IF NOT EXISTS idx_subagent_messages_provider ON subagent_messages (job_id, provider_id);
 
 CREATE TABLE IF NOT EXISTS subagent_tool_executions (
-  id              BIGSERIAL PRIMARY KEY,
-  job_id          BIGINT      NOT NULL REFERENCES minion_jobs(id) ON DELETE CASCADE,
-  message_idx     INTEGER     NOT NULL,
-  tool_use_id     TEXT        NOT NULL,
-  tool_name       TEXT        NOT NULL,
-  input           JSONB       NOT NULL,
-  status          TEXT        NOT NULL,
-  output          JSONB,
-  error           TEXT,
-  schema_version  INTEGER     NOT NULL DEFAULT 1,
-  provider_id     TEXT,
-  started_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-  ended_at        TIMESTAMPTZ,
+  id                  BIGSERIAL PRIMARY KEY,
+  job_id              BIGINT      NOT NULL REFERENCES minion_jobs(id) ON DELETE CASCADE,
+  message_idx         INTEGER     NOT NULL,
+  tool_use_id         TEXT        NOT NULL,
+  tool_name           TEXT        NOT NULL,
+  input               JSONB       NOT NULL,
+  status              TEXT        NOT NULL,
+  output              JSONB,
+  error               TEXT,
+  schema_version      INTEGER     NOT NULL DEFAULT 1,
+  provider_id         TEXT,
+  -- v0.38 D11: gbrain-owned stable IDs (ordinal assigned at first observation;
+  -- gbrain_tool_use_id is uuid v7). Reconciliation on crash-replay uses
+  -- (job_id, message_idx, ordinal) as the unique key. Legacy rows (pre-v81)
+  -- have ordinal=NULL and resolve via the read-time D5 shim.
+  ordinal             INTEGER,
+  gbrain_tool_use_id  UUID,
+  started_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ended_at            TIMESTAMPTZ,
   CONSTRAINT uniq_subagent_tools_use_id UNIQUE (job_id, tool_use_id),
+  CONSTRAINT subagent_tool_executions_stable_id UNIQUE (job_id, message_idx, ordinal),
   CONSTRAINT chk_subagent_tools_status CHECK (status IN ('pending','complete','failed'))
 );
 CREATE INDEX IF NOT EXISTS idx_subagent_tools_job ON subagent_tool_executions (job_id, status);

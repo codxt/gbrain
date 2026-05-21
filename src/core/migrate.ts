@@ -3766,6 +3766,66 @@ export const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    version: 81,
+    name: 'subagent_tool_executions_stable_id',
+    // v0.38 Slice 1 — D11 stable-ID columns. The pre-v81 reconciliation key
+    // for crash-replay was `(job_id, tool_use_id)` where tool_use_id came from
+    // the Anthropic Messages API. That was load-bearing for the v0.15 crash-
+    // replay guarantee but tied the loop to Anthropic-direct. The provider-
+    // agnostic loop assigns its own ordinal at FIRST observation of a tool
+    // call in a turn; that ordinal + gbrain_tool_use_id (uuid v7) become the
+    // canonical reconciliation key. The provider's own tool_use_id stays as a
+    // side channel for debugging.
+    //
+    // Migration shape:
+    //   - ordinal INTEGER NULL: legacy rows have NULL; new writes always set
+    //     a value. UNIQUE on (job_id, message_idx, ordinal) treats multiple
+    //     NULL ordinals as distinct (Postgres semantics), so legacy rows
+    //     don't collide with each other or with new writes.
+    //   - gbrain_tool_use_id UUID NULL: same NULL semantics; populated at
+    //     write time post-Slice-1, NULL on legacy rows.
+    //   - Existing constraint uniq_subagent_tools_use_id (job_id, tool_use_id)
+    //     is preserved — provider IDs stay deduplicated within a job.
+    //   - The read-time D5 shim recomputes a stable key for legacy rows from
+    //     (job_id, message_idx, content_blocks index, tool_name); no data
+    //     migration needed.
+    //
+    // ADD COLUMN with no DEFAULT (NULL) is metadata-only on Postgres 11+ and
+    // PGLite 17.5 — instant on tables of any size. The UNIQUE constraint
+    // builds a partial index; on a typical brain with ~hundreds of subagent
+    // rows this is sub-millisecond.
+    idempotent: true,
+    sql: `
+      ALTER TABLE subagent_tool_executions
+        ADD COLUMN IF NOT EXISTS ordinal INTEGER,
+        ADD COLUMN IF NOT EXISTS gbrain_tool_use_id UUID;
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname = 'subagent_tool_executions_stable_id'
+        ) THEN
+          ALTER TABLE subagent_tool_executions
+            ADD CONSTRAINT subagent_tool_executions_stable_id
+            UNIQUE (job_id, message_idx, ordinal);
+        END IF;
+      END$$;
+    `,
+    sqlFor: {
+      // PGLite doesn't support DO blocks. Use a simpler conditional via
+      // information_schema with a separate idempotent guard.
+      pglite: `
+        ALTER TABLE subagent_tool_executions
+          ADD COLUMN IF NOT EXISTS ordinal INTEGER;
+        ALTER TABLE subagent_tool_executions
+          ADD COLUMN IF NOT EXISTS gbrain_tool_use_id UUID;
+        ALTER TABLE subagent_tool_executions
+          ADD CONSTRAINT subagent_tool_executions_stable_id
+          UNIQUE (job_id, message_idx, ordinal);
+      `,
+    },
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length > 0
