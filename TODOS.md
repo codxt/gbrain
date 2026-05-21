@@ -3,7 +3,7 @@
 
 ## v0.37.8.0 pre-existing master test regression (noticed during ship)
 
-- [ ] **P0: `test/doctor-report-remote.test.ts:65` — `full report on healthy brain` fails with `health_score: 50` (expects `>=70`).** Reproduces in isolation on fresh PGLite. Introduced by master's v0.37.3.0 (#1215, `skill_brain_first` doctor check) which appears to return non-ok on freshly-initialized test brains, dropping the composite health score below the test's threshold. Fix shape: either (a) `skill_brain_first` should return `ok` (or `n/a`) on empty/test brains with no user-authored skills, OR (b) `doctor-report-remote.test.ts:68` should seed the skills directory before computing the score, OR (c) downgrade `skill_brain_first` non-ok to a check that doesn't penalize the score on fresh brains. Owner: maintainer of #1215. Noticed during /ship of garrytan/kolkata-v3 → v0.37.8.0.
+- [x] **P0: `test/doctor-report-remote.test.ts:65` — `full report on healthy brain` fails with `health_score: 50` (expects `>=70`).** **Completed:** v0.37.10.0 (2026-05-21). Resolved structurally by the empty-brain-100/100 fix in `src/core/pglite-engine.ts` + `src/core/postgres-engine.ts` (commit 9aa571f3): pages-empty brains now get vacuous-truth full marks on every breakdown component (35/25/15/15/10), so the freshly-initialized test brain's composite stays >=70 even when `skill_brain_first` returns non-ok. Test file renamed to `test/doctor-report-remote.serial.test.ts` and made hermetic (isolates `GBRAIN_HOME` to a tempdir via beforeAll/afterAll per `scripts/check-test-isolation.sh` R1 — env mutation requires serial quarantine).
 
 ## v0.37.7.0 federated-brains + autopilot safety follow-ups (v0.37.x+)
 
