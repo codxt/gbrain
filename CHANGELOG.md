@@ -2,7 +2,7 @@
 
 All notable changes to GBrain will be documented in this file.
 
-## [0.37.3.0] - 2026-05-20
+## [0.37.6.0] - 2026-05-20
 
 **For agents indexing source code with gbrain, the right embedding model is now obvious — and the brain tells you so out loud.**
 
@@ -10,7 +10,7 @@ If you point a gbrain instance at a repo full of source code (the gstack per-wor
 
 This release closes the discovery gap on four surfaces. The embedding-providers doc grows a "Code-heavy brain" branch in the decision tree. Topology 3 in the architecture doc gets a "Recommended embedding model" subsection with a paste-ready `gbrain init --pglite --embedding-model voyage:voyage-code-3 --embedding-dimensions 1024`. The setup skill points at it. And `gbrain reindex --code` itself prints a short stderr nudge when the configured embedding model isn't code-tuned, with the exact `gbrain config set` lines you'd run to switch. Opt out per-environment with `GBRAIN_NO_CODE_MODEL_NUDGE=1` if you're on OpenAI for compliance or single-vendor procurement.
 
-Same diff also fixes a smaller bug that would have made the nudge land badly. Before v0.37.3.0, `gbrain reindex --code` printed its cost preview with a hardcoded `text-embedding-3-large` model name, even when you had `voyage:voyage-code-3` configured. The constant was a v0.13-era back-compat shim that nobody noticed had drifted. The preview now reads the gateway-configured model directly, so the line above the new nudge is finally truthful.
+Same diff also fixes a smaller bug that would have made the nudge land badly. Before v0.37.6.0, `gbrain reindex --code` printed its cost preview with a hardcoded `text-embedding-3-large` model name, even when you had `voyage:voyage-code-3` configured. The constant was a v0.13-era back-compat shim that nobody noticed had drifted. The preview now reads the gateway-configured model directly, so the line above the new nudge is finally truthful.
 
 ### How to use it
 
@@ -47,7 +47,251 @@ export GBRAIN_NO_CODE_MODEL_NUDGE=1
 - `test/reindex-code-nudge.serial.test.ts` — new test, serial: 6 pure-function cases over `shouldNudgeCodeModel` (text-embedding-3-large fires, text-embedding-3-small fires, voyage-4-large fires, voyage-code-3 doesn't, Voyage-Code-3 case-insensitive doesn't, empty/null/undefined/whitespace doesn't) + 5 CLI integration cases pinning the suppression contract (default fires on stderr not stdout, `--no-embed` suppresses, `--json` suppresses, `GBRAIN_NO_CODE_MODEL_NUDGE=1` suppresses, already-optimal voyage-code-3 no-ops).
 - `test/reindex-code-model-source.serial.test.ts` — new IRON-RULE regression test pinning the cost-preview correctness fix: `runReindexCode({dryRun: true}).model` equals the gateway-configured embedding model name (voyage-code-3, text-embedding-3-small, voyage-4-large round-trip), NOT the legacy hardcoded `'text-embedding-3-large'` constant.
 - `test/reindex-code.test.ts` — updated: now configures the gateway with `openai:text-embedding-3-large` in `beforeAll` (`getEmbeddingModelName()` requires gateway state; the existing model-name assertion at `:80` still passes verbatim) and sets `GBRAIN_NO_CODE_MODEL_NUDGE=1` so test stderr stays clean.
-- `CLAUDE.md` — new Key Files entry for `src/commands/reindex-code.ts`; Voyage recipe entry annotated with the v0.37.3.0 discoverability surfaces.
+- `CLAUDE.md` — new Key Files entry for `src/commands/reindex-code.ts`; Voyage recipe entry annotated with the v0.37.6.0 discoverability surfaces.
+
+## [0.37.5.0] - 2026-05-20
+
+**`gbrain doctor` stops flagging your tags as broken when they're not.**
+
+If you have a tag line like `tags: ["yc", "w2025", "ai"]` in your frontmatter, that's perfectly valid YAML. The doctor used to flag it anyway. One user with a 105K-page brain saw 6,981 of these flagged at once. The fix: the validator now parses suspicious values with a real YAML parser before complaining. Valid YAML stops getting flagged. Genuinely broken titles like `title: "Foo "bar" baz"` still get caught.
+
+**How to use it**
+
+```bash
+gbrain upgrade
+gbrain doctor --json | jq '.checks[]
+  | select(.name=="frontmatter_integrity")
+  | .breakdown.NESTED_QUOTES'
+```
+
+The NESTED_QUOTES count on your brain should drop toward zero on next `gbrain doctor`. No data rewrite needed. No `gbrain frontmatter generate --fix` sweep. The existing files are already valid YAML.
+
+**Why this is the right layer**
+
+`@garrytan-agents` opened PR #1217 with a one-line fix to the emitter side: switch tag serialization from `JSON.stringify` (double-quoted) to single-quoted YAML. That made the headline 6,981-error case go away by changing what new writes look like. But Codex's outside-voice review during planning caught a deeper bug: even with a perfect emitter, the validator at `src/core/markdown.ts:219-238` was a raw quote counter (`count(unescaped ")  >= 3 => error`) that doesn't understand YAML at all. It would still flag a clean single-quoted scalar like `title: 'a: "b" "c"'` (6 unescaped `"` characters, but valid YAML). The fix had to land on the dumb side, not the emitter side.
+
+PR #1217 was closed; thanks to @garrytan-agents for the 6,981-error signal that exposed the underlying class.
+
+**What's safe to know about**
+
+- The fix is additive. Lines with `< 3` unescaped quotes still pass instantly (existing fast path). Only suspicious lines pay the per-line YAML parse, and only when count >= 3 (rare on healthy data).
+- `js-yaml@3.14.2` is now a direct dependency (was transitive via gray-matter). Adding a direct pin so a future gray-matter major bump can't yank the import.
+- The frontmatter emitter at `src/core/frontmatter-inference.ts` is unchanged. Existing tag style (`tags: ["yc"]`) is now correctly recognized as valid; the cosmetic consistency with `brain-writer.ts:184`'s single-quote repair style is a follow-up TODO, not part of this fix.
+
+### Itemized changes
+
+#### Fixed
+
+- `src/core/markdown.ts:219-238` — NESTED_QUOTES validator now disambiguates via `js-yaml.safeLoad`. The count-of-quotes heuristic stays as a fast path; suspicious lines (count >= 3) are parsed before being flagged. Closes the 6,981-error class for any brain whose frontmatter has been valid all along.
+- `js-yaml` declared as a direct dependency in `package.json`; `@types/js-yaml` added to devDependencies. `bun.lock` re-resolves the transitive entry to a top-level pin (no version change).
+
+#### Added
+
+- 5 new YAML-aware regression cases in `test/markdown-validation.test.ts`:
+  - flow sequence with quoted tags does NOT trigger (6,981-error regression guard)
+  - single-quoted scalar with literal inner double quotes does NOT trigger
+  - escaped-as-`''` quotes inside flow seq do NOT trigger
+  - genuinely broken nested quotes STILL trigger
+  - unclosed bracket STILL surfaces NESTED_QUOTES or YAML_PARSE (never silent)
+
+#### For contributors
+
+- `js-yaml` is now an explicit direct dep. New code that needs YAML emission/parsing should import from it directly rather than relying on gray-matter's transitive resolution.
+## [0.37.4.0] - 2026-05-20
+
+**A nightly safety net for the bug class that bit gbrain 10 times in 2 years.**
+**Plus a graph cap so a hub person with 500 connections can't make `traverseGraph` blow up.**
+
+The 10+ forward-reference bugs documented in CLAUDE.md (#239 / #243 / #266 / #357 / #366 / #374 / #375 / #378 / #395 / #396) all shipped the same way: a new release added a column to the schema blob, an old user's brain didn't have that column, and `gbrain upgrade` wedged on `column "..." does not exist`. We always caught these in production. This release ports a CI pattern from pgGraph (a sibling pgrx extension) that catches the next member of that bug class before users hit it — by walking a simulated-legacy brain forward to head on every nightly CI run, against real Postgres.
+
+The same wave adds an opt-in cap on `traverseGraph` for hub-fanout protection, a property-based fuzz harness for the trust-boundary validators, and a memory budget gate that probes peak RSS during a synthetic workload. None of it changes default behavior; everything that touches production code is back-compat.
+
+### What landed
+
+| Piece | What it catches | How it runs |
+|---|---|---|
+| **Schema-migration matrix** | Walk-forward wedges from any historical brain shape (pre-v0.13 + pre-v0.18 seeded; extensible to any earlier shape) | `bash tests/heavy/pg_upgrade_matrix.sh` — Postgres-only, ~4s for both shapes |
+| **Fuzz harness for trust-boundary validators** | Edge-case crashes in `validatePageSlug`, `validateFilename`, `escapeLikePattern`, `parseFactsFence`, plus property tests for `splitBody`, `slugifyPath`, `sanitizeQueryForPrompt`, `validateUploadPath` | `bun test test/fuzz/` (runs in default `bun test`, ~3s for 1000 inputs × 8 properties) |
+| **RSS budget gate** | Peak RSS regressions over a 200-page synthetic workload, baseline-vs-now delta | `bash tests/heavy/measure_rss.sh` — Linux-only baseline refresh, informational on macOS |
+| **Read-latency-under-sync** | Search p99 degradation while writes hammer the engine | `bash tests/heavy/read_latency_under_sync.sh` |
+| **Sync lock regression** | One winner + N-1 lock-busy + zero leaked `gbrain_cycle_locks` rows under concurrent `gbrain sync` (real semantics — losers fail fast, they don't queue) | `bash tests/heavy/sync_lock_regression.sh` — Postgres-only |
+| **`tests/heavy/` convention** | Home for ops-shape scripts that don't fit `*.slow.test.ts` (per-file unit-shape) | `bun run test:heavy` runs the directory sequentially |
+| **Nightly + opt-in CI workflow** | Runs the whole heavy suite at 08:17 UTC daily AND on any PR tagged `heavy-tests`, with Postgres service + artifact upload on failure | `.github/workflows/heavy-tests.yml` |
+| **BFS frontier cap on `traverseGraph`** | Hub-person fan-out blowing up at depth ≥ 2 (back-compat opt-in via new `frontierCap` knob) | `engine.traverseGraph(slug, depth, { frontierCap: 500 })` |
+
+### How to turn it on
+
+The heavy suite is opt-in. To run locally:
+
+```bash
+# Spin up Postgres for the Postgres-only tests:
+docker run -d --name gbrain-test-pg \
+  -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=gbrain_test -p 5434:5432 pgvector/pgvector:pg16
+export DATABASE_URL=postgresql://postgres:postgres@localhost:5434/gbrain_test
+bun run test:heavy
+```
+
+For the frontier cap, opt in per call:
+
+```ts
+const nodes = await engine.traverseGraph('alice', 3, { frontierCap: 500 });
+// nodes.length is bounded — that's the protection. A truncation-signal
+// callback was designed but stripped pre-merge; see "what's safe to know"
+// below for the deferral.
+```
+
+### What's safe to know about
+
+- **Default behavior unchanged.** No call to `traverseGraph` sees different results unless they pass `frontierCap`. The `traverse_graph` MCP wire shape (Array of nodes, not a struct) is preserved — external clients keep working.
+- **`onTruncation` callback stripped pre-merge.** The original plan called for a callback that fired when the cap dropped nodes. /review caught two bugs in the v1 algorithm: false positives when a graph organically has exactly `cap` unique nodes at some depth, and false negatives in diamond graphs because the recursive `LIMIT N` ran before the outer `SELECT DISTINCT`. Rather than ship a signal callers couldn't trust, we cut it. The cap itself (the actually-useful frontier protection) ships clean; the signal returns in a follow-up wave once a dedupe-then-cap SQL rewrite + Postgres parity E2E land. Tracked in TODOS.md → "T8 truncation signal".
+- **`tests/heavy/` isn't in `bun test`.** The runner stays fast (8 shards, ~6 minutes). The heavy stuff runs nightly or on label.
+- **RSS baseline is empty on first commit.** The first Linux CI nightly populates it via `tests/heavy/measure_rss.sh --refresh-baseline`. Until then every measurement is informational. The macOS fallback path is `process.memoryUsage().rss` (VmRSS, mmap-inflated) — the gate refuses to write a baseline from a macOS run by design.
+- **Fuzz purity is bundle-verified.** `scripts/check-fuzz-purity.sh` runs in `verify`. It bundles each pure-target file via `bun build --target=bun` and greps for `node:fs` / `node:child_process` / engine imports. Source-grep can be fooled by transitive imports; the bundle can't.
+
+### What we caught and fixed before merging
+
+Three review passes ran on the plan before any code: a CEO scope review (Approach C, full sweep, 9 tasks), an Eng dual-voice review (Claude subagent + Codex), and a Codex 2nd-pass verifier against the revised plan. The 2nd pass caught issues the first two missed:
+
+- The fuzz purity guard's `require.cache` snapshot would have been theatrical under Bun's ESM loader. Swapped to bun-bundle-then-grep, which catches transitive impurity. Five proposed pure targets turned out to transitively import `fs` (validator-shaped functions living in modules that pull in helpers that import fs); they moved to `mixed-validators.test.ts` with property tests but no purity guarantee. Only `escapeLikePattern` and `parseFactsFence` are bundle-pure.
+- The first-pass T8 design stored truncation metadata on the engine instance. Concurrent traversals would have stomped each other's metadata. Switched to a per-call `onTruncation` callback — each call's closure is independent.
+- The first-pass T3 design proposed committing a 50K-page PGLite fixture to the repo. Repo-size risk + contradicted T1's no-blobs principle. Switched to in-process synthesis (200 pages by default; configurable up).
+- Three reviewers caught the original `LIMIT N PARTITION BY depth` SQL as not-actually-valid syntax. Real shape is parenthesized `LIMIT N ORDER BY (slug, id)` inside the recursive term, with `DISTINCT ON` post-dedupe.
+
+### Itemized changes
+
+#### Engine (production code)
+
+- `src/core/engine.ts` — new export `TraverseGraphOpts`. `traverseGraph(slug, depth, opts?)` opts widen to include `frontierCap?: number`. Return type unchanged (`Promise<GraphNode[]>`).
+- `src/core/postgres-engine.ts` — recursive CTE in `traverseGraph` adds parenthesized `LIMIT N ORDER BY p2.slug ASC, p2.id ASC` inside the recursive term when `frontierCap` is set.
+- `src/core/pglite-engine.ts` — same shape, same SQL, positional params.
+
+#### Heavy tests (new directory)
+
+- `tests/heavy/pg_upgrade_matrix.sh` + `tests/heavy/_build_legacy_fixtures.sh` + `tests/heavy/fixtures/down-mutate-pre-v0.13.sql` + `tests/heavy/fixtures/down-mutate-pre-v0.18.sql` — schema-migration walk-forward matrix.
+- `tests/heavy/measure_rss.sh` + `tests/heavy/_measure_rss_workload.ts` + `tests/heavy/rss-baseline.json` — RSS budget gate, informational-only until Linux baseline lands.
+- `tests/heavy/read_latency_under_sync.sh` + `tests/heavy/_read_latency_workload.ts` — search p50/p95/p99 baseline vs under-load.
+- `tests/heavy/sync_lock_regression.sh` — concurrent `gbrain sync` lock contention.
+- `tests/heavy/README.md` + `scripts/run-heavy.sh` + `bun run test:heavy` script — convention + runner. Underscore-prefix files (`_foo.sh`) are helpers skipped by the runner.
+
+#### Fuzz harness (new)
+
+- `test/fuzz/pure-validators.test.ts` — purity-guarded: `escapeLikePattern`, `parseFactsFence`.
+- `test/fuzz/mixed-validators.test.ts` — same property tests, no purity guarantee: `validatePageSlug`, `validateFilename`, `splitBody`, `slugifyPath`, `sanitizeQueryForPrompt`.
+- `test/fuzz/filesystem-validators.test.ts` — fs-backed property tests with temp dirs: `validateUploadPath` (symlink-escape, traversal probe, arbitrary input).
+- `test/fuzz/regressions/README.md` — pin-failed-fuzz-inputs convention.
+- `scripts/check-fuzz-purity.sh` — bun-bundle + grep for banned imports. Wired into `bun run verify`.
+
+#### CI workflow (new)
+
+- `.github/workflows/heavy-tests.yml` — `cron: '17 8 * * *'` + `pull_request: types: [labeled]` with `heavy-tests` filter + `workflow_dispatch`. Postgres service + pinned action SHAs + artifact upload on failure (uploads `~/.gbrain/audit/heavy-*` + `tests/heavy/rss-baseline.json`).
+
+#### Tests + docs
+
+- `test/regressions/v0_36_frontier_cap.test.ts` — 4 pinned contracts: cap-unset back-compat, cap-hit bounds result to `<= cap+1` (the actually-useful protection invariant), MCP wire-shape preservation (still Array), concurrency independence (two concurrent calls on same engine with different caps — larger cap sees >= as many nodes).
+- `CLAUDE.md` — file taxonomy gains `tests/heavy/*.sh` + `test/fuzz/*.test.ts` entries; `traverseGraph` entry notes the new opt + the stripped truncation callback.
+- `llms-full.txt` regenerated.
+## [0.37.3.0] - 2026-05-19
+
+**Your agent now catches skills that would call the web before checking the brain. The same class of miss that flagged Garry's own Palantir tweet as a risk because none of the three eval models knew he built it.**
+
+Real story: on 2026-05-19, the cross-modal eval looked at a tweet about Palantir's Finance UI and said "this is risky, none of us recognize this work." But Garry's brain already had pages explaining he designed that Finance UI and shipped 150+ PSDs in 2006. The brain knew. The eval skill went to the web first and never asked the brain. A static SKILL.md check catches the authorship side of that failure mode: any skill that calls `web_search`, Perplexity, Exa, Crustdata, Happenstance, or Captain API now has to declare either how it consults the brain first, or that it intentionally doesn't need to.
+
+How to turn it on (it's already on after upgrade):
+
+```
+gbrain doctor                 # warns on skills that need brain-first declaration
+gbrain doctor --fix           # auto-adds the canonical Convention callout to each
+gbrain doctor --fix --dry-run # preview without writing
+```
+
+What a flagged skill looks like in your `~/.openclaw/workspace/skills/`:
+
+| Skill | What the doctor sees | Easy fix |
+|---|---|---|
+| Author called `perplexity` for research but never `gbrain search` | warn — `missing_brain_first` | `gbrain doctor --fix` adds `> **Convention:** see [conventions/brain-first.md](...)` near the top |
+| Pure infra (cron schedulers, container managers, ask-user prompters) | warn — same | Add `brain_first: exempt` to frontmatter; that's it |
+| Author typed `brain-first: exempt` (kebab-case typo) | warn + paste-ready hint | Switch to snake_case `brain_first: exempt` |
+| Already carries `> **Convention:** see conventions/brain-first.md` | ok — `compliant_callout` | no action |
+| First `gbrain search` reference comes before first `web_search` in body | ok — `compliant_position` | no action |
+
+The cathedral piece that makes this stick: `gbrain doctor --fix` runs through the same git-safety gates that `dry-fix.ts` already shipped (refuses to write to a dirty working tree, refuses on non-git files, refuses against the install-tree fallback). So you can run `--fix` on your OpenClaw workspace without losing the audit trail.
+
+Things to watch:
+- Audit log lives at `~/.gbrain/audit/skill-brain-first-YYYY-Www.jsonl` (ISO-week rotated). Stable brains write zero lines per doctor run; only state transitions (new violation, resolved violation, applied fix) get recorded. So `tail -20` actually shows you signal, not noise.
+- The snapshot at `~/.gbrain/audit/skill-brain-first-snapshot.json` is last-writer-wins under concurrent doctor runs. If two doctor processes race, one snapshot wins; the next run reconciles.
+- New skills scaffolded via `gbrain skillify scaffold <name>` get the canonical Convention callout pre-inserted. `gbrain skillify check <skill>` fails (exit 1) when external-lookup-without-callout-or-exempt is detected, so non-compliant skills can't sneak through scaffold-then-merge.
+- This catches the AUTHORSHIP miss class. The RUNTIME analog (intercepting MCP tool dispatch when a subagent calls `web_search` without an earlier `gbrain search` in the same turn) is filed as a v0.37+ TODO. Both layers eventually.
+
+What we caught and fixed before merging:
+- Codex's outside-voice review (gpt-5.5) found 18 issues against an earlier draft. Three of them changed the design materially:
+  1. The original plan shipped a one-shot upgrade migration that would have silently edited host SKILL.md files outside the `--fix` git-safety contract. Codex flagged that as smuggling the PR allowlist back in as data. Dropped the migration; doctor surfaces the hint and `--fix` applies via the existing safety gates.
+  2. The original plan auto-exempted skills with `tools: [search, query, put_page]` + `writes_pages: true`. Codex pointed out this covers up the riskiest class (ingest skills that write pages AND call Perplexity). Dropped the rule entirely; brain-tool ownership doesn't prove brain-first compliance.
+  3. The first-pass detection regex scanned the whole file. Codex pointed out `tools: [web_search]` in YAML frontmatter would be the "first external reference" and false-flag the skill. Detection now strips frontmatter before any position-relative scan.
+
+### Itemized changes
+
+#### Added
+
+- **`brain_first: exempt` frontmatter field** — declarative opt-out for skills that don't need brain-first. The single canonical form (`brain_first: exempt`, snake_case, lowercase, unquoted). Near-misses (`brain-first`, `BrainFirst`, quoted values, unknown values) trigger a paste-ready doctor hint instead of silent failure.
+- **`skill_brain_first` doctor check** — scans every SKILL.md under the configured skills dir, detects external-lookup patterns (web_search / web_fetch / exa / perplexity / happenstance / crustdata / captain_api / firecrawl), confirms compliance via canonical Convention callout / explicit Phase 1 brain heading / position-relative brain reference / `brain_first: exempt` opt-out / absence of external pattern. Surfaces structured `Check.issues[]` for JSON tooling; emits formerly-EXEMPT_SKILLS hints for PR #1206's historical 40-name allowlist.
+- **`gbrain doctor --fix` MISSING_RULE_PATTERNS** — `dry-fix.ts` gains an INSERT pattern type alongside the existing REPLACE patterns. Auto-inserts `> **Convention:** see [conventions/brain-first.md](../conventions/brain-first.md) for the lookup chain (search → query → get_page → external).` at the `after-h1-paragraph` site of any flagged skill. Idempotent (re-runs detect the existing callout and skip).
+- **`gbrain skillify scaffold` pre-insert** — `src/core/skillify/templates.ts` now writes the canonical Convention callout into new SKILL.md scaffolds by default. Zero-friction compliance for new skills.
+- **`gbrain skillify check` required item 12** — brain-first compliance is now a real gate, not informational. Exit 1 when an external-lookup skill lacks both the callout and the `brain_first: exempt` declaration.
+- **Snapshot+diff audit at `~/.gbrain/audit/skill-brain-first-YYYY-Www.jsonl`** — transition-only writes. Stable brains produce 0 audit lines per doctor run. `readRecentBrainFirstEvents(7)` exposes the audit for future trend tooling.
+- **Live OpenClaw dev script** at `scripts/live-brain-first-check.ts` — opt-in (`$OPENCLAW_WORKSPACE`-gated) shape report against the live deployment. Not in CI; run manually during dev / QA / post-`--fix` validation.
+- **CI guard `scripts/check-skill-brain-first.sh`** — JSON-parses `gbrain doctor --json` to gate `bun run verify` on `warn` (doctor's exit code only flags `fail`).
+
+#### Changed
+
+- **`src/core/skill-frontmatter.ts`** — NEW shared content-based frontmatter parser. Replaces `filing-audit.ts`'s private path-based `parseFrontmatter`. Adds `tools?`, `triggers?`, `brain_first?: 'exempt'`, and a typed `brain_first_typo` field that surfaces near-miss declarations.
+- **`src/core/skill-fix-gates.ts`** — NEW shared safety primitives module (working-tree check, code-fence guard, etc.). Both REPLACE and INSERT auto-fix patterns consume from here; `dry-fix.ts` re-exports for back-compat.
+- **`skills/conventions/brain-first.md`** — extended with declarative opt-out documentation. New "Declarative opt-out (v0.36.x)" section covers the strict canonical form, typo behavior, and when the opt-out is unnecessary.
+- **PR #1206 hardcoded `EXEMPT_SKILLS` allowlist** — replaced with structural-signal inference + explicit `brain_first: exempt` opt-out. The 40-name list is preserved as `FORMERLY_HARDCODED_EXEMPT` in `src/core/skill-brain-first.ts` purely for doctor-hint flow (CMT1).
+- **`functional-area-resolver` and `strategic-reading` skills in this repo** — gained `brain_first: exempt` frontmatter. Both name `perplexity` in dispatcher prose (sub-skill cross-references) without actually calling external APIs; the regex tripped on word boundary. Declarative opt-out is the canonical fix for this false-positive class.
+
+#### Tests
+
+- New: `test/skill-brain-first.test.ts` (56 cases — frontmatter parser, analyzer ladder across 9 fixtures, offset helpers, regex shape, audit snapshot+diff, PR #1206 regression absorption).
+- New: `test/fixtures/brain-first-skills/*/SKILL.md` (9 fixtures driving the unit + E2E suites).
+- New: `test/e2e/skill-brain-first.test.ts` (12 cases — shape assertions, `--fix` dry-run/apply cycle, idempotency, audit transition signal).
+- Existing: 170 cases in `test/filing-audit.test.ts`, `test/dry-fix.test.ts`, `test/doctor*.test.ts` pass unchanged (regression-preservation).
+
+#### Removed
+
+- Nothing user-facing. The `parseFrontmatter` function inside `filing-audit.ts` is now a thin wrapper over the new shared parser — internal refactor only.
+
+#### For contributors
+
+- The brain-first regex is intentionally permissive (word-boundary `\bperplexity\b` etc.). False-positives on name mentions in dispatcher prose are expected and answered by the declarative opt-out. Tightening to require API-call shape is a v0.36.x+ TODO.
+- The runtime MCP-dispatch brain-first gate is the bigger follow-up wave. Static-check covers authorship; runtime covers compliance. Filed as v0.37+ TODO.
+- Co-Authored-By: garrytan-agents (PR #1206 contributor) — the EXEMPT_SKILLS list shape, regex set, and tweet-shield incident framing carry forward verbatim.
+
+## To take advantage of v0.37.3.0
+
+`gbrain upgrade` runs `gbrain post-upgrade` which runs `gbrain apply-migrations`.
+This release has no schema migrations — every change is filesystem-only — so the
+upgrade is purely the binary swap.
+
+1. **Verify the new check landed:**
+   ```bash
+   gbrain doctor --json | jq '.checks[] | select(.name == "skill_brain_first")'
+   ```
+2. **If your skills dir flags any violators**, the easiest fix is the auto-fix:
+   ```bash
+   gbrain doctor --fix --dry-run  # preview
+   gbrain doctor --fix            # apply (writes the canonical callout)
+   ```
+   Or for genuine infra skills, add `brain_first: exempt` to the frontmatter manually.
+3. **Your agent reads `skills/conventions/brain-first.md` the next time you interact with it.** The new "Declarative opt-out" section documents the contract; no manual agent prompt update needed.
+4. **If `gbrain doctor` reports unexpected violations or any step fails,** file an issue: https://github.com/garrytan/gbrain/issues with:
+   - output of `gbrain doctor --json | jq '.checks[] | select(.name == "skill_brain_first")'`
+   - the SKILL.md of the surprising flag
+   - whether `--fix` cleaned it up
+
+   The brain-first detection is regex-based and will hit false-positives on
+   skills that NAME but don't CALL the external tools. Declarative opt-out
+   (`brain_first: exempt`) is the canonical answer for that class.
 
 ## [0.37.2.0] - 2026-05-19
 
