@@ -1140,6 +1140,19 @@ export async function registerBuiltinHandlers(worker: MinionWorker, engine: Brai
   // renewal callback and the stalled-sweeper kills the job.
   //
   // Phase failures surface as report.status='partial' (via runCycle's
+  // v0.40.3.0: per-page contextual retrieval re-embed handler. PROTECTED
+  // name (src/core/minions/protected-names.ts) — MCP/OAuth callers can't
+  // submit; only trusted local callers (config.ts mode-switch hook,
+  // reindex sweep, doctor --remediate). Composes the global Haiku rate-
+  // leaser per D26 P0-3 + delegates to contextual-retrieval-service.ts
+  // for the two-phase build.
+  {
+    const { makeContextualReindexHandler } = await import(
+      '../core/minions/handlers/contextual-reindex-per-chunk.ts'
+    );
+    worker.register('contextual_reindex_per_chunk', makeContextualReindexHandler({ engine }));
+  }
+
   // derivation); the handler returns { partial, status, report } so
   // `gbrain jobs get <id>` shows the full structured report. Does NOT
   // throw on partial: a flaky phase must not block every future cycle.
