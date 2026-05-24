@@ -88,7 +88,7 @@ describe('v0.41 T4: gbrain-creator manifest shape', () => {
   });
 
   test('declares concept_themes calibration domain with cluster_summary aggregator', () => {
-    const themes = pack.calibration_domains.find((d) => d.name === 'concept_themes');
+    const themes = pack.calibration_domains!.find((d) => d.name === 'concept_themes');
     expect(themes).toBeDefined();
     expect(themes?.aggregator).toBe('cluster_summary');
     expect(themes?.page_types).toContain('concept');
@@ -128,18 +128,18 @@ describe('v0.41 T4: gbrain-investor manifest shape', () => {
   });
 
   test('declares 3 calibration domains (deal_success + founder_evaluation + market_call)', () => {
-    const names = pack.calibration_domains.map((d) => d.name).sort();
+    const names = pack.calibration_domains!.map((d) => d.name).sort();
     expect(names).toEqual(['deal_success', 'founder_evaluation', 'market_call']);
   });
 
   test('every calibration_domain aggregator is in the closed AggregatorKind enum', () => {
-    for (const d of pack.calibration_domains) {
+    for (const d of pack.calibration_domains!) {
       expect(AGGREGATOR_KINDS).toContain(d.aggregator);
     }
   });
 
   test('market_call uses weighted_brier (high-conviction-rare-event semantics)', () => {
-    const mc = pack.calibration_domains.find((d) => d.name === 'market_call');
+    const mc = pack.calibration_domains!.find((d) => d.name === 'market_call');
     expect(mc?.aggregator).toBe('weighted_brier');
   });
 
@@ -169,17 +169,17 @@ describe('v0.41 T4: gbrain-engineer manifest shape', () => {
   });
 
   test('declares 3 calibration domains (architecture_calls + effort_estimates + risk_assessment)', () => {
-    const names = pack.calibration_domains.map((d) => d.name).sort();
+    const names = pack.calibration_domains!.map((d) => d.name).sort();
     expect(names).toEqual(['architecture_calls', 'effort_estimates', 'risk_assessment']);
   });
 
   test('effort_estimates uses weighted_brier (small-vs-big estimate scaling)', () => {
-    const ee = pack.calibration_domains.find((d) => d.name === 'effort_estimates');
+    const ee = pack.calibration_domains!.find((d) => d.name === 'effort_estimates');
     expect(ee?.aggregator).toBe('weighted_brier');
   });
 
   test('every calibration_domain aggregator is in the closed AggregatorKind enum', () => {
-    for (const d of pack.calibration_domains) {
+    for (const d of pack.calibration_domains!) {
       expect(AGGREGATOR_KINDS).toContain(d.aggregator);
     }
   });
@@ -213,7 +213,7 @@ describe('v0.41 T4: gbrain-everything meta-pack shape', () => {
   });
 
   test('explicitly unions ALL 7 lens calibration domains', () => {
-    const names = pack.calibration_domains.map((d) => d.name).sort();
+    const names = pack.calibration_domains!.map((d) => d.name).sort();
     expect(names).toEqual([
       'architecture_calls',
       'concept_themes',
@@ -226,13 +226,13 @@ describe('v0.41 T4: gbrain-everything meta-pack shape', () => {
   });
 
   test('every meta-pack calibration_domain aggregator is in the closed enum', () => {
-    for (const d of pack.calibration_domains) {
+    for (const d of pack.calibration_domains!) {
       expect(AGGREGATOR_KINDS).toContain(d.aggregator);
     }
   });
 
   test('aggregator selection matches per-pack declarations (cross-pack consistency)', () => {
-    const byName = Object.fromEntries(pack.calibration_domains.map((d) => [d.name, d.aggregator]));
+    const byName = Object.fromEntries(pack.calibration_domains!.map((d) => [d.name, d.aggregator]));
     // From investor
     expect(byName.deal_success).toBe('scalar_brier');
     expect(byName.market_call).toBe('weighted_brier');

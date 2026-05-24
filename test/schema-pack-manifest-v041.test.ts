@@ -49,9 +49,12 @@ describe('v0.41 T3: AggregatorKind closed registry', () => {
 });
 
 describe('v0.41 T3: SchemaPackManifestSchema phases field', () => {
-  test('phases defaults to empty array when omitted', () => {
+  test('phases is undefined when omitted; consumers apply ?? [] at read site', () => {
     const parsed = parseSchemaPackManifest(baseManifest());
-    expect(parsed.phases).toEqual([]);
+    expect(parsed.phases).toBeUndefined();
+    // Standard consumer pattern:
+    const effective = parsed.phases ?? [];
+    expect(effective).toEqual([]);
   });
 
   test('phases accepts string array of phase names', () => {
@@ -77,9 +80,11 @@ describe('v0.41 T3: SchemaPackManifestSchema phases field', () => {
 });
 
 describe('v0.41 T3: SchemaPackManifestSchema calibration_domains field', () => {
-  test('calibration_domains defaults to empty array when omitted', () => {
+  test('calibration_domains is undefined when omitted; consumers apply ?? [] at read site', () => {
     const parsed = parseSchemaPackManifest(baseManifest());
-    expect(parsed.calibration_domains).toEqual([]);
+    expect(parsed.calibration_domains).toBeUndefined();
+    const effective = parsed.calibration_domains ?? [];
+    expect(effective).toEqual([]);
   });
 
   test('accepts well-formed domain entry', () => {
@@ -94,8 +99,8 @@ describe('v0.41 T3: SchemaPackManifestSchema calibration_domains field', () => {
         ],
       }),
     );
-    expect(parsed.calibration_domains.length).toBe(1);
-    const d = parsed.calibration_domains[0];
+    expect(parsed.calibration_domains!.length).toBe(1);
+    const d = parsed.calibration_domains![0];
     expect(d.name).toBe('deal_success');
     expect(d.aggregator).toBe('scalar_brier');
     expect(d.page_types).toEqual(['deal']);
@@ -110,7 +115,7 @@ describe('v0.41 T3: SchemaPackManifestSchema calibration_domains field', () => {
           ],
         }),
       );
-      expect(parsed.calibration_domains[0].aggregator).toBe(aggregator);
+      expect(parsed.calibration_domains![0].aggregator).toBe(aggregator);
     }
   });
 
@@ -203,7 +208,7 @@ describe('v0.41 T3: SchemaPackManifestSchema calibration_domains field', () => {
         ],
       }),
     );
-    expect(parsed.calibration_domains[0].page_types).toEqual(['code', 'decision']);
+    expect(parsed.calibration_domains![0].page_types).toEqual(['code', 'decision']);
   });
 
   test('accepts multiple domain entries per pack', () => {
@@ -217,8 +222,8 @@ describe('v0.41 T3: SchemaPackManifestSchema calibration_domains field', () => {
         ],
       }),
     );
-    expect(parsed.calibration_domains.length).toBe(4);
-    const byName = Object.fromEntries(parsed.calibration_domains.map((d: CalibrationDomain) => [d.name, d.aggregator]));
+    expect(parsed.calibration_domains!.length).toBe(4);
+    const byName = Object.fromEntries(parsed.calibration_domains!.map((d: CalibrationDomain) => [d.name, d.aggregator]));
     expect(byName.deal_success).toBe('scalar_brier');
     expect(byName.market_call).toBe('weighted_brier');
     expect(byName.concept_themes).toBe('cluster_summary');
@@ -240,8 +245,8 @@ describe('v0.41 T3: backward compatibility with v0.38 manifests', () => {
       ],
     });
     const parsed: SchemaPackManifest = parseSchemaPackManifest(v038Shape);
-    expect(parsed.phases).toEqual([]);
-    expect(parsed.calibration_domains).toEqual([]);
+    expect(parsed.phases).toBeUndefined();
+    expect(parsed.calibration_domains).toBeUndefined();
     expect(parsed.page_types.length).toBe(1);
   });
 

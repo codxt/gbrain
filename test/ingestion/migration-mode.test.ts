@@ -97,13 +97,13 @@ describe('v0.41 T2: IngestionSource.mode discriminator', () => {
 
 describe('v0.41 T2: daemon handleEmit branches on source.mode', () => {
   let dispatched: IngestionEvent[];
-  let dispatch: (event: IngestionEvent) => Promise<{ kind: 'ok' | 'failed'; error?: string }>;
+  let dispatch: (event: IngestionEvent) => Promise<{ kind: 'queued' } | { kind: 'failed'; error: string }>;
 
   beforeEach(() => {
     dispatched = [];
     dispatch = async (event) => {
       dispatched.push(event);
-      return { kind: 'ok' as const };
+      return { kind: 'queued' as const };
     };
   });
 

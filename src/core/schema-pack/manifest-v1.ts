@@ -192,15 +192,22 @@ export const SchemaPackManifestSchema = z.object({
    * Phase names are validated as strings at parse time and against the
    * runtime CyclePhase union at pack-load by the registry (kept as string[]
    * here to avoid a circular import from src/core/cycle.ts).
+   *
+   * Optional rather than .default([]) so existing v0.38 manifest casts in
+   * test fixtures don't need to be re-typed; consumers apply `?? []` at
+   * the read site.
    */
-  phases: z.array(z.string().min(1)).default([]),
+  phases: z.array(z.string().min(1)).optional(),
   /**
    * v0.41 T3 — per-pack calibration domain declarations. The
    * calibration_profile cycle phase widens at v0.41 from `{}` placeholder
    * JSONB to a real aggregator pass over each declared domain. See
    * CalibrationDomainSchema for the per-entry shape.
+   *
+   * Optional for the same reason as `phases` — preserves cast-compatibility
+   * with pre-v0.41 fixtures.
    */
-  calibration_domains: z.array(CalibrationDomainSchema).default([]),
+  calibration_domains: z.array(CalibrationDomainSchema).optional(),
 }).strict();
 
 export type SchemaPackManifest = z.infer<typeof SchemaPackManifestSchema>;
