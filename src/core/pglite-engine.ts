@@ -196,13 +196,30 @@ export class PGLiteEngine implements BrainEngine {
   }
 
   async disconnect(): Promise<void> {
-    if (this._db) {
-      await this._db.close();
-      this._db = null;
-    }
-    if (this._lock?.acquired) {
-      await releaseLock(this._lock);
-      this._lock = null;
+    // v0.40.10.0: snapshot + early-null up front so a concurrent
+    // `connect()` cannot observe `_db` pointing at a handle that's
+    // mid-close (partial-state race). Closes the bug class PR #1337
+    // originally surfaced.
+    //
+    // try/finally guarantees the file lock releases even if
+    // `db.close()` throws. Pre-fix, a close-throw would leak the
+    // lock and the next gbrain invocation would wedge waiting for it.
+    // The pre-fix code happened to work because the close branch
+    // ran first and the lock branch ran second only when close
+    // didn't throw — moving to the snapshot pattern made the
+    // try/finally explicitly necessary.
+    const db = this._db;
+    this._db = null;
+    const lock = this._lock;
+    this._lock = null;
+    try {
+      if (db) {
+        await db.close();
+      }
+    } finally {
+      if (lock?.acquired) {
+        await releaseLock(lock);
+      }
     }
   }
 
