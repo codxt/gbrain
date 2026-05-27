@@ -121,7 +121,7 @@ active pack matches the declared `from`, the `pack_upgrade_available`
 onboard check surfaces the successor + a `manual_only` RemediationStep
 pointing at the `unify-types` PROTECTED Minion handler.
 
-v0.42 ships **gbrain-base-v2** as the declared successor to
+v0.41.22 ships **gbrain-base-v2** as the declared successor to
 gbrain-base@1.x — collapses 94 noisy types to 15 canonical via
 declarative mapping_rules. Run via `gbrain onboard --check --explain`
 (preview) → `gbrain jobs submit unify-types --allow-protected --params
