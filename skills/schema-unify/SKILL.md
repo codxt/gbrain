@@ -14,16 +14,16 @@ tools:
   - gbrain pages restore
   - mcp:run_onboard
 triggers:
-  - unify my types
-  - migrate to gbrain-base-v2
-  - 94 types to 14
-  - apply canonical taxonomy
-  - clean up my page types
-  - pack upgrade
-  - shrink type proliferation
-  - what does the canonical taxonomy look like
-  - consolidate page types
-  - retype pages to canonical
+  - "unify my types"
+  - "migrate to gbrain-base-v2"
+  - "94 types to 14"
+  - "apply canonical taxonomy"
+  - "clean up my page types"
+  - "pack upgrade"
+  - "shrink type proliferation"
+  - "what does the canonical taxonomy look like"
+  - "consolidate page types"
+  - "retype pages to canonical"
 ---
 
 # Schema Unification (gbrain-base → gbrain-base-v2)
@@ -182,6 +182,66 @@ Worried about a specific cluster's mapping?
   → Fork gbrain-base-v2 (`gbrain schema fork gbrain-base-v2 my-pack`),
     edit mapping_rules in your fork, then target the fork.
 ```
+
+## Contract
+
+Inputs:
+- A brain on `gbrain-base` (or any pack with `migration_from: gbrain-base-v2`).
+- Write access to submit a PROTECTED Minion handler (`--allow-protected`).
+- ~10 min wallclock on a 186K-page brain.
+
+Outputs:
+- Pages retyped to canonical types with `frontmatter.legacy_type` preserved (per-page rollback signal).
+- `slug_aliases` rows for concept-redirect pages (alias table IS the resolver — no link rewrite).
+- Real `links` rows for edge-shaped pages (`atom-partner-link`, `symlink`, etc.).
+- Active pack flipped to `gbrain-base-v2` atomically at end of successful run.
+
+Side effects:
+- Source pages soft-deleted with 72h restore TTL (`gbrain pages restore <slug>`).
+- One-time cache invalidation on KNOBS_HASH_VERSION bump (5→6); self-healing in `cache.ttl_seconds`.
+- Query-time `--type X` alias-expands via `expandTypeFilter` (D14 back-compat).
+
+Failure modes:
+- Concurrent submission rejected by the `gbrain-unify` db-lock; second call exits gracefully.
+- Catch-all retype excludes `page_to_link` + `page_to_alias` source types (caught in E2E pre-merge).
+- Phase failures abort the run before `active_pack_flipped`; partial state restorable via op_checkpoint resume.
+
+## Anti-Patterns
+
+DON'T:
+- Submit `unify-types` directly via the MCP `submit_job` op without `--allow-protected`. PROTECTED handlers require trusted local callers; remote MCP rejection is the intentional trust boundary.
+- Edit `mapping_rules` in `gbrain-base-v2.yaml` to skip clusters you don't trust. Fork the pack instead (`gbrain schema fork`) so the source-of-truth migration stays consistent across brains.
+- Run `unify-types` from inside an autopilot tick. The check is `manual_only` per D17 — autopilot deliberately never auto-fires it because pack upgrades are one-time consenting taxonomy decisions.
+- Hard-delete soft-deleted source pages before the 72h restore window. Use `gbrain pages restore <slug>` first if rollback is needed.
+- Assume `frontmatter.legacy_type` survives every roundtrip. The marker is canonical for the immediate post-migration window; downstream re-imports may overwrite it.
+
+## Output Format
+
+Per phase, the handler emits to stderr:
+```
+[unify-types] phase=retype-explicit applied=N skipped=M  cost=USD  ttl=Ns
+[unify-types] phase=retype-catch-all applied=N
+[unify-types] phase=page-to-link converted=N pages soft-deleted
+[unify-types] phase=page-to-alias aliased=N pages soft-deleted
+[unify-types] phase=sync residual=N
+[unify-types] active_pack flipped from gbrain-base to gbrain-base-v2
+```
+
+Final celebration summary to stderr:
+```
+═══════════════════════════════════════════════════════════
+  gbrain-base-v2 migration complete
+═══════════════════════════════════════════════════════════
+  Before: 94 distinct page types
+  After:  15 canonical types
+  Retyped:      25,632 pages
+  Aliased:       5,521 redirects → slug_aliases table
+  Linkified:        65 ghost pages → real link rows
+  Soft-deleted:  5,586 pages (restorable for 72h)
+═══════════════════════════════════════════════════════════
+```
+
+JSON output (`gbrain jobs follow <id> --json`) returns the structured `UnifyTypesResult` shape with `per_phase`, `pack_identity_after`, `active_pack_flipped`.
 
 ## Reference
 
