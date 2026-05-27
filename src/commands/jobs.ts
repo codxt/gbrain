@@ -1646,7 +1646,7 @@ export async function registerBuiltinHandlers(worker: MinionWorker, engine: Brai
     });
   });
 
-  // v0.41.23.0 SkillOpt Minion handler — for --background CLI invocations.
+  // v0.42.0.0 SkillOpt Minion handler — for --background CLI invocations.
   // PROTECTED by name so MCP submission rejects (only trusted CLI can
   // submit). Threaded SkillOptOpts JSON in job.data.
   worker.register('skillopt', async (job) => {
@@ -1689,7 +1689,7 @@ export async function registerBuiltinHandlers(worker: MinionWorker, engine: Brai
     };
   });
 
-  process.stderr.write('[minion worker] brain-health-100 handlers registered (12 ops, 4 protected) + embed-backfill (v0.40) + embed-catch-up (v0.42) + unify-types (v0.42) + skillopt (v0.41.23.0, protected)\n');
+  process.stderr.write('[minion worker] brain-health-100 handlers registered (12 ops, 4 protected) + embed-backfill (v0.40) + embed-catch-up (v0.42) + unify-types (v0.42) + skillopt (v0.42.0.0, protected)\n');
 
   // Plugin discovery — one line per discovered plugin (mirrors the
   // openclaw-seam startup line convention from v0.11+). Loaded

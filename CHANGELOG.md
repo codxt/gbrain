@@ -2,7 +2,7 @@
 
 All notable changes to GBrain will be documented in this file.
 
-## [0.41.23.0] - 2026-05-27
+## [0.42.0.0] - 2026-05-27
 
 **Your skills now improve themselves overnight.**
 
@@ -10,7 +10,7 @@ GBrain ships 47 bundled skills that tell agents how to handle specific kinds
 of tasks. Until now, those skills only got better when a human rewrote them.
 A human can read three or four execution traces and spot a problem; nobody
 can read forty execution traces and spot which exact rule is hurting and
-which is helping. v0.41.23.0 closes that loop. You write a benchmark of
+which is helping. v0.42.0.0 closes that loop. You write a benchmark of
 realistic tasks, and `gbrain skillopt <skill>` watches the agent run those
 tasks against your current skill text, proposes specific edits, re-tests,
 and only keeps changes that measurably improve the score.
@@ -83,7 +83,7 @@ A typical 20-task benchmark with defaults costs ~$0.90 per run.
   `~/.gbrain/audit/skillopt-YYYY-Www.jsonl` (ISO-week rotated). `gbrain
   doctor` will surface failed runs (when the doctor check ships in v0.42).
 
-### Cathedral fully ships in v0.41.23.0
+### Cathedral fully ships in v0.42.0.0
 
 Every originally-deferred follow-up is included:
 
@@ -130,7 +130,7 @@ Every originally-deferred follow-up is included:
 - Sweep all 47 bundled skills with their own `skillopt-benchmark.jsonl`
   fixtures (one PR per ~5 skills; manual benchmark authoring required)
 
-## To take advantage of v0.41.23.0
+## To take advantage of v0.42.0.0
 
 `gbrain upgrade` should do this automatically. To try the new command:
 
