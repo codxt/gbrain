@@ -2,7 +2,7 @@
 
 All notable changes to GBrain will be documented in this file.
 
-## [0.41.23.0] - 2026-05-27
+## [0.41.25.0] - 2026-05-27
 
 **`gbrain dream --source <id>` finally counts as a cycle.**
 
@@ -79,7 +79,7 @@ this release because the cycle plumbing doesn't exist to honor it
 yet (shipping the flag would be a lying flag); filed as a v0.42+
 follow-up.
 
-### To take advantage of v0.41.23.0
+### To take advantage of v0.41.25.0
 
 `gbrain upgrade` should do this automatically. If you target a
 specific source via cron or by hand:
@@ -189,6 +189,270 @@ specific source via cron or by hand:
   explicit user decision (T1 drop Fix 4, T3 typed-error catch).
 - Plan + 11 AskUserQuestion decision points captured at
   `~/.claude/plans/system-instruction-you-are-working-starry-papert.md`.
+## [0.41.24.0] - 2026-05-27
+
+**Your reformatted meeting transcripts now actually parse.**
+
+If you reformat Circleback meetings into a per-line shape like
+`**Garry Tan** (12:34): hello`, gbrain used to look at them and say
+`no_match` — even when 78% of the page was valid chat. Your 36 reformatted
+meetings sat there inert and the fact extractor never saw a single
+message. v0.41.24.0 makes them flow through.
+
+Two problems were stacked. First, the parser only looked at the first
+10 lines of a page to figure out which chat format it was. Meeting
+pages start with `## Summary`, a blockquote, a `## Transcript` heading
+— ~10 lines of prose before the actual chat. None of those lines
+matched any chat regex, so the parser gave up. Second, even if the
+parser had kept looking, none of the 12 built-in patterns recognized
+the time-only shape Circleback exports use: `**Speaker** (HH:MM):` or
+`**Speaker** (HH:MM:SS):`. Both shapes were invisible.
+
+The fix tightens the detector AND teaches it the missing shape. The
+detector now falls back to scanning the full body when the head pass
+returns a weak score, AND it refuses to accept a final score below 5%
+(so an essay with one stray chat-shape line stays `no_match` instead
+of false-positive parsing as a 1-message conversation). The new
+`bold-paren-time` built-in covers the two Circleback variants. After
+the fix, 113 of 367 Circleback meeting pages on the canonical brain
+parse correctly (was 0), and **20,167 messages** flow through to the
+fact extractor for the first time. The other 254 are notes-only
+meetings that link to a separate transcript file — those legitimately
+have nothing to parse.
+
+**How to use it:** `gbrain upgrade`. Then either enable the cycle phase
+that runs in the background (`gbrain config set
+cycle.conversation_facts_backfill.enabled true`) or fire it manually
+(`gbrain extract-conversation-facts <source>`). The parser fix
+unblocks the pipeline; the trigger is yours.
+
+**The detector numbers that matter** (parse.ts):
+
+| Setting | Value | What it does |
+|---|---|---|
+| `SCORING_HEAD_LINES` | 10 | Lines scanned in the fast path (unchanged) |
+| `SCORING_HEAD_TRIGGER_THRESHOLD` | 0.3 | Below this, fall back to full-body scoring |
+| `SCORING_MIN_ACCEPTANCE` | 0.05 | Final score floor — below this, return `no_match` |
+
+The 0.3 trigger threshold (instead of "fall back only on score === 0")
+closes a silent bug class: a blockquote that accidentally matches an
+unrelated pattern at 0.1 used to suppress the fallback entirely. Now
+it doesn't.
+
+**Things to watch:**
+
+- The new pattern treats Circleback's `(00:00)` / `(00:00:00)` as
+  wall-clock time on the page's frontmatter date. Real Circleback
+  timestamps are elapsed-time-from-meeting-start, so every message in
+  a meeting lands on the same day starting at 00:00 + offset. The
+  fact extractor cares about speaker + content, not precise
+  timestamps, so this is honest enough. Proper per-line wall-clock
+  reconstruction would need an `elapsed_time: true` flag on
+  PatternEntry — filed as v0.42+ scope.
+- `imessage-slack` still wins on full-datetime overlaps. The new
+  pattern's regex requires `\)` immediately after the time group, so
+  `(2024-03-15 9:00 AM)` shapes correctly fall through to the more
+  specific pattern.
+## [0.41.23.0] - 2026-05-26
+
+**You can now see how every extractor in your brain is doing — how
+often it halts, what it spent, whether its eval gate fired — and your
+pack manifests can declare new extractable kinds in one verb.**
+
+Pre-v0.41.23, when an extractor halted partway through a long page or a
+cycle phase silently stopped writing facts, you found out by querying
+the brain a week later and noticing things were missing. The
+information was theoretically in JSONL audit files, but the operator
+surface to read it didn't exist. Same gap on the authoring side: if you
+wanted your schema pack to declare a new extractable kind, you wrote
+YAML by hand and hoped you got the shape right.
+
+This release fixes both at the operator surface. Every extractor that
+runs in the brain (the deterministic facts.conversation extractor, the
+three LLM-backed cycle phases for atoms/concepts/takes, and the
+facts.fence reconciler) now writes one receipt page per run AND
+upserts a row into a 7-day rollup table. Receipts are queryable like
+any other page (they get a 0.3x source-boost demote so they surface in
+search but never dominate user content). The rollup powers the new
+`gbrain extract status` dashboard.
+
+How to use it:
+
+```bash
+gbrain extract status                    # 7-day rollup, top-5 by halt rate
+gbrain extract status --kind atoms       # filter to one extractor kind
+gbrain extract status --verbose --json   # full table + monitoring envelope
+
+gbrain extract --explain facts.conversation
+# Prints: which pack declares this kind (or "built-in cycle phase"),
+# what files it expects, eval dimensions, last 7d rollup.
+
+gbrain schema scaffold-extractable claim --pack my-pack
+# Generates 5 placeholder fixtures + a prompt template stub, declares
+# the type extractable on the pack manifest. Refuses on existing files
+# unless --force.
+
+gbrain extract benchmark --pack my-pack --kind claim
+# v0.41.23 ships as a stub-reporter (validates fixture corpus shape).
+# LLM dispatch deferred to a follow-up release.
+```
+
+What you'd see in a concrete example. Say your `extract_atoms` phase is
+silently halting on long conversation pages:
+
+| Kind                  | 7d cost  | Halts | Halt rate | Eval pass/fail |
+|-----------------------|----------|-------|-----------|----------------|
+| atoms                 | $0.30    | 5     | 50.0%     | 3 / 0          |
+| concepts              | $0.10    | 1     | 10.0%     | 1 / 0          |
+| facts.conversation    | $1.50    | 0     | 0.0%      | 5 / 0          |
+
+Before v0.41.23 you had to know to grep the JSONL audit files. Now `gbrain
+extract status` puts the halt rate above the fold, ordered most-troubled
+first.
+
+Things to watch:
+
+- Receipts have `dream_generated: true` AND `type: extract_receipt`
+  stamped (belt + suspenders — the eligibility predicate's anti-loop
+  guard would reject either alone, but having both means it cannot
+  silently start consuming its own output if one check ever drifts).
+- The rollup write is best-effort: a transient DB error during cycle
+  doesn't crash the cycle, it bumps a `rollup_write_failures` counter
+  that `gbrain doctor` surfaces on the next check.
+- `verifier_path` on `ExtractableSpec` is RESERVED in v0.41.23 — it parses
+  in pack manifests but refuses at runtime. Pack-shipped verifier code
+  arrives in a follow-up release under the trust-review gate.
+
+What's NOT in this release (deferred to a follow-up):
+
+- Replay versioning + `gbrain extract replay --since v<sha>`. Waiting
+  for real prompt-churn signal from pack-author usage before paying the
+  migration cost.
+- A unified `gbrain extract <kind>` LLM dispatcher. v0.41.13 explicitly
+  chose against routing extract through progressive-batch ("extraction
+  is pure deterministic regex; cost-cap value-add lives at the embed
+  step"); this release respects that decision.
+
+### To take advantage of v0.41.23.0
+
+`gbrain upgrade` should do this automatically. If it didn't, or if
+`gbrain doctor` warns about a partial migration:
+
+1. **Run the orchestrator manually:**
+   ```bash
+   gbrain apply-migrations --yes
+   ```
+2. **Verify the new extract surfaces are live:**
+   ```bash
+   gbrain doctor --json | jq '.checks[] | select(.name == "extract_health")'
+   gbrain extract status
+   gbrain extract --explain facts.conversation
+   ```
+3. **If any step fails or the numbers look wrong,** please file an issue:
+   https://github.com/garrytan/gbrain/issues with:
+   - output of `gbrain doctor`
+   - contents of `~/.gbrain/upgrade-errors.jsonl` if it exists
+   - which step broke
+
+### Itemized changes
+
+**Wave A — schema + receipts foundation:**
+- `src/core/schema-pack/manifest-v1.ts` — `extractable` field widens
+  from `z.boolean()` to `z.union([z.boolean(), ExtractableSpecSchema])`.
+  Spec carries `prompt_template`, `fixture_corpus`, `eval_dimensions`,
+  `benchmark_min_recall`, and the reserved `verifier_path`. Back-compat
+  preserved — every existing pack parses unchanged.
+- `src/core/schema-pack/extractable.ts` — new `extractableSpecsFromPack`,
+  `getExtractableSpec`, and `refuseVerifierPathInV042` helpers. Boolean
+  shape maps to an empty default spec.
+- `src/core/types.ts` — `extract_receipt` joins ALL_PAGE_TYPES.
+- `src/core/search/source-boost.ts` — `extracts/` prefix gets factor
+  0.3 in DEFAULT_SOURCE_BOOSTS (D-EXTRACT-42).
+- `src/core/extract/receipt-writer.ts` (NEW) — `writeReceipt(engine,
+  input)` writes one receipt page per run. Slug shape per D-EXTRACT-17:
+  `extracts/{date}/{kind}/{source_id}/{run_id_short}/round-{N}.md`.
+  Frontmatter stamps BOTH `type: extract_receipt` AND `dream_generated:
+  true` per D-EXTRACT-19.
+- `src/core/extract/rollup-writer.ts` (NEW) — `upsertExtractRollup`
+  rolls per-run metrics into `extract_rollup_7d` via `INSERT ... ON
+  CONFLICT (kind, source_id, day) DO UPDATE`. Best-effort with a
+  process-scoped error-dedup so we never log the same DB error twice.
+- `src/core/migrate.ts` — v104 `extract_rollup_7d_table` adds the
+  rollup table + `idx_extract_rollup_7d_day` index. Mirrors in both
+  Postgres + PGLite via `sqlFor`.
+- `src/commands/doctor.ts` — new `extract_health` check reads the
+  rollup for the last 7 days, surfaces per-kind halt rate + cost +
+  eval pass/fail count, warns at halt rate > 10% AND when
+  rollup_write_failures > 0. Pre-v104 brains report `ok` silently.
+
+**Wave B — hook receipts into shipped extractors:**
+- `src/commands/extract-conversation-facts.ts` — writes receipt +
+  rollup row in both the success path AND the BudgetExhausted catch
+  path (so a mid-run cost-cap halt still produces a queryable
+  record). Threads `run_id` through the existing op-checkpoint id.
+- `src/core/cycle/extract-atoms.ts` — receipt per cycle tick, kind
+  `'atoms'`, round `'single'`, source-scoped from `phaseOpts.scope`.
+- `src/core/cycle/synthesize-concepts.ts` — receipt per tick, kind
+  `'concepts'`, source `'default'` (brain-global phase).
+- `src/core/cycle/propose-takes.ts` — receipt per tick, kind
+  `'takes.proposed'`.
+- `src/core/cycle/extract-facts.ts` — receipt per tick, kind
+  `'facts.fence'`, `cost_usd: 0` (deterministic reconciler).
+
+**Wave C — pack-author scaffolding + benchmark:**
+- `src/core/schema-pack/scaffold-extractable.ts` (NEW) — wraps
+  `updateTypeOnPack` from the v0.41 mutate library to declare a type
+  extractable in one verb. Generates 5 placeholder fixtures + a
+  pack-supplied prompt template under `packs/<pack>/fixtures/extract/`
+  and `packs/<pack>/prompts/extract/`. Refuses to overwrite existing
+  files unless `--force`.
+- `src/commands/schema.ts` — dispatch for `gbrain schema
+  scaffold-extractable <type> --pack <pack>`.
+- `src/commands/extract-benchmark.ts` (NEW) — `gbrain extract
+  benchmark --pack <name> --kind <type>`. Loads the pack's fixture
+  corpus through strict D-EXTRACT-21 path validation (rejects absolute
+  paths, `..` traversal, null bytes, AND symlinks that resolve outside
+  pack root). v0.41.23 ships as a stub reporter; LLM dispatch deferred.
+
+**Wave D — operator surfaces:**
+- `src/commands/extract-status.ts` (NEW) — `gbrain extract status
+  [--source-id ID] [--kind X] [--verbose] [--json]`. Reads
+  `extract_rollup_7d` for the last 7 days, sorts by (halt_rate desc,
+  cost desc). Kubectl-style table; top-5 by default with `... +N more
+  rows (pass --verbose for all)` hint. JSON envelope `schema_version:
+  1` for monitoring pipelines.
+- `src/commands/extract-explain.ts` (NEW) — `gbrain extract --explain
+  <kind>`. Prints declaration source (pack-declared vs built-in cycle
+  phase), prompt_template + fixture_corpus paths with `✓`/`(missing)`
+  markers, eval_dimensions, benchmark_min_recall, and the last 7d
+  rollup row.
+- `src/commands/extract.ts` — top-level dispatch for `status`,
+  `benchmark`, and `--explain` subcommands intercepted before the
+  existing `links`/`timeline`/`all` parser. Help text reorganized into
+  Extraction / Inspection / Status sections.
+
+**Tests:**
+- `test/extractable-spec-widening.test.ts` (NEW, 22 cases) —
+  back-compat boolean shape parses, struct shape parses, helpers,
+  D-EXTRACT-37 verifier_path refuse at runtime.
+- `test/extract/receipt-writer.test.ts` (NEW, 12 cases) — slug shape,
+  frontmatter belt+suspenders, idempotent resume. Uses the canonical
+  PGLite block per CLAUDE.md R3+R4 (one engine per file,
+  `resetPgliteState` in `beforeEach`).
+- `test/extract/benchmark.test.ts` (NEW, 17 cases) — path validation
+  rejections (absolute, `..`, null bytes, symlink-outside-pack,
+  symlink-inside-pack-resolves-outside) + JSONL contract enforcement
+  (rejects arrays passing typeof object check).
+- `test/extract/status.test.ts` (NEW, 15 cases) — pure aggregation +
+  formatting over mock rollup rows.
+- `test/schema-pack/scaffold-extractable.test.ts` (NEW, 15 cases) —
+  scaffold mechanics + explicit privacy-rule assertions guarding
+  against real-name leakage in placeholder fixtures.
+- `test/doctor-extract-health.test.ts` (NEW, 8 cases) — empty/healthy/
+  warn-on-halt-rate/warn-on-rollup-failure cases.
+- `test/propose-takes.test.ts` — assertion tightened from `INSERT` to
+  `INSERT INTO take_proposals` so the new rollup INSERT doesn't
+  trigger a false positive in the existing test.
 
 ## [0.41.22.1] - 2026-05-27
 
@@ -564,6 +828,80 @@ doctor` and `~/.gbrain/upgrade-errors.jsonl` if it exists.
 ### Itemized changes
 
 #### Added
+- `bold-paren-time` built-in pattern in
+  `src/core/conversation-parser/builtins.ts` recognizes
+  `**Speaker** (HH:MM): text` and `**Speaker** (HH:MM:SS): text`.
+  Verified against 367 Circleback meeting files at `~/git/brain/meetings/`:
+  113 now parse (was 0), 20,167 messages flowing through.
+- `scorePatternFull(body, entry)` exported from
+  `src/core/conversation-parser/parse.ts` for callers that need
+  full-body scoring of a single pattern.
+
+#### Changed
+- `parseConversation()` falls back to full-body re-scoring when the
+  head pass's top score is below `SCORING_HEAD_TRIGGER_THRESHOLD`
+  (0.3) instead of only when it is exactly 0. The pre-fix shape left
+  a real bug class open where a stray head match suppressed the
+  fallback.
+- `parseConversation()` returns `no_match` when the final winner's
+  score is below `SCORING_MIN_ACCEPTANCE` (0.05) to prevent
+  essay-false-positive parsing.
+- `scorePattern()` is now a thin wrapper over a private
+  `scoreFromLines` core that holds the quick_reject + regex loop in
+  one place. `scorePattern` behavior + contract + signature unchanged.
+
+#### Tests
+- 11 new unit cases in `test/conversation-parser/parse.test.ts`:
+  the #1533 IRON-RULE regression pin (meeting page →
+  `regex_match`), honest unmatched-count after fallback, pure-prose
+  stays `no_match`, 300-line preamble + 50 chat lines hits fallback,
+  `scorePatternFull` direct boundaries, stray-head-match
+  miscategorization guard, essay false-positive acceptance-floor
+  guard, `bold-paren-time` matches HH:MM, `bold-paren-time` matches
+  HH:MM:SS, `imessage-slack` still wins on full-datetime overlap,
+  meeting page with preamble + `bold-paren-time` transcript hits
+  fallback.
+- Existing "caps at SCORING_HEAD_LINES (10)" test reshaped to pin
+  behavior (10 match + 1 non-match scores 1.0; 9 non-match + 1 match
+  + 100 after scores 0.1) instead of importing the constant.
+
+#### Closed
+- Closes #1533 — both the bug class (trigger threshold + acceptance
+  floor) and the user-facing case (113 Circleback meetings × 20,167
+  messages).
+
+## To take advantage of v0.41.24.0
+
+`gbrain upgrade` should do this automatically. Then to actually flow
+your reformatted Circleback meetings through the fact extractor:
+
+1. **One-shot manual extraction (immediate):**
+   ```bash
+   gbrain extract-conversation-facts <source>
+   ```
+   Replace `<source>` with the source id holding your meeting pages.
+   Use `gbrain sources list` to find it.
+
+2. **OR enable the cycle phase (continuous, opt-in):**
+   ```bash
+   gbrain config set cycle.conversation_facts_backfill.enabled true
+   ```
+   The dream cycle picks them up on the next tick.
+
+3. **Verify the parser sees them:**
+   ```bash
+   gbrain conversation-parser scan <slug> --json
+   ```
+   Expected output for a Circleback meeting:
+   `"phase": "regex_match"`, `"matched_pattern_id":
+   "bold-paren-time"`, `"message_count"` in the dozens to hundreds.
+
+4. **If parser still reports `no_match`** on a page you expected to
+   parse, your meeting may use a transcript shape outside the 13
+   built-in patterns. Run `gbrain conversation-parser list-builtins`
+   to see what shapes are recognized, file an issue with a sample
+   page, or wait for v0.42+'s user-declared `simple_pattern`
+   support.
 - `atomsExistingForHashes(engine, sourceId, hashes[])` exported from
   `src/core/cycle/extract-atoms.ts` — one batched SQL roundtrip that
   returns the set of `content_hash16` values already extracted as atoms
