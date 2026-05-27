@@ -20,6 +20,7 @@ import {
 import { loadCompletedMigrations } from '../core/preferences.ts';
 import { compareVersions } from './migrations/index.ts';
 import { createProgress, startHeartbeat, type ProgressReporter } from '../core/progress.ts';
+import { categorizeCheck, type CheckCategory } from '../core/doctor-categories.ts';
 import { getCliOptions, cliOptsToProgressOptions } from '../core/cli-options.ts';
 import type { DbUrlSource } from '../core/config.ts';
 import { gbrainPath } from '../core/config.ts';
@@ -54,6 +55,12 @@ export interface Check {
   remediation?: import('../core/remediation-step.ts').RemediationStep[];
   /** Top-level triage state per D13. */
   remediation_status?: 'remediable' | 'human_only' | 'blocked';
+  /**
+   * v0.41.19.0 category tag — assigned by `categorizeCheck(name)` at report
+   * compute time. Optional + additive so legacy consumers ignore it.
+   * Source of truth: `src/core/doctor-categories.ts`.
+   */
+  category?: CheckCategory;
 }
 
 /**
@@ -68,26 +75,92 @@ export interface Check {
 export interface DoctorReport {
   schema_version: 2;
   status: 'healthy' | 'warnings' | 'unhealthy';
+  /**
+   * Legacy all-checks aggregate. `100 − 20×fails − 5×warns`, floor 0.
+   *
+   * Preserved verbatim from pre-v0.41.19.0 for back-compat with `gbrain
+   * doctor --remediate`, `gbrain remote doctor`, the MCP `run_doctor` op,
+   * and any external monitor / CI gate that reads this field. NO behavior
+   * change: a fixed check set produces a byte-identical `health_score`
+   * before and after the v0.41.19.0 wave.
+   */
   health_score: number;
+  /**
+   * v0.41.19.0 — same penalty math (100 − 20×fails − 5×warns) restricted to
+   * checks tagged `category: 'brain'` by `categorizeCheck()`. The "is my
+   * brain's data healthy?" signal, decoupled from skill routing / ops /
+   * meta. Orthogonal to `BrainHealth.brain_score` (the weighted
+   * 35/25/15/15/10 composite surfaced by the `brain_score` doctor check) —
+   * `brain_checks_score` counts brain-category check failures;
+   * `brain_score` measures brain-data composition. Doctor renders both.
+   */
+  brain_checks_score: number;
+  /**
+   * v0.41.19.0 — per-category penalty scores. Same math as `health_score`,
+   * restricted to each category in turn. An operator reading `score: 15`
+   * driven by 504 RESOLVER.md warnings now sees `category_scores.brain:
+   * ~100` and `category_scores.skill: 0` instead of one polluted number.
+   */
+  category_scores: {
+    brain: number;
+    skill: number;
+    ops: number;
+    meta: number;
+  };
   checks: Check[];
 }
 
-/**
- * Compute the {status, health_score} headline from a list of checks.
- * Mirrors the calculation in outputResults() so remote callers and the
- * existing CLI front-end agree on what "healthy" means.
- */
-export function computeDoctorReport(checks: Check[]): DoctorReport {
-  const hasFail = checks.some(c => c.status === 'fail');
-  const hasWarn = checks.some(c => c.status === 'warn');
+function _penaltyScore(checks: Check[]): number {
   let score = 100;
   for (const c of checks) {
     if (c.status === 'fail') score -= 20;
     else if (c.status === 'warn') score -= 5;
   }
-  score = Math.max(0, score);
+  return Math.max(0, score);
+}
+
+/**
+ * Compute the {status, health_score, brain_checks_score, category_scores}
+ * headline from a list of checks. Mirrors the calculation in outputResults()
+ * so remote callers and the existing CLI front-end agree on what "healthy"
+ * means.
+ *
+ * **Back-compat invariant:** `health_score` math is byte-identical to
+ * pre-v0.41.19.0 for any fixed `checks` array. The new fields are additive.
+ *
+ * **Categorization:** each check is tagged via `categorizeCheck(name)` at
+ * report-build time if it doesn't already carry a `category` field. The
+ * categorizer is the single source of truth in
+ * `src/core/doctor-categories.ts`.
+ */
+export function computeDoctorReport(checks: Check[]): DoctorReport {
+  const tagged = checks.map((c) =>
+    c.category ? c : { ...c, category: categorizeCheck(c.name) },
+  );
+
+  const hasFail = tagged.some((c) => c.status === 'fail');
+  const hasWarn = tagged.some((c) => c.status === 'warn');
+
+  const health_score = _penaltyScore(tagged);
+  const brain = tagged.filter((c) => c.category === 'brain');
+  const skill = tagged.filter((c) => c.category === 'skill');
+  const ops = tagged.filter((c) => c.category === 'ops');
+  const meta = tagged.filter((c) => c.category === 'meta');
+
   const status: DoctorReport['status'] = hasFail ? 'unhealthy' : hasWarn ? 'warnings' : 'healthy';
-  return { schema_version: 2, status, health_score: score, checks };
+  return {
+    schema_version: 2,
+    status,
+    health_score,
+    brain_checks_score: _penaltyScore(brain),
+    category_scores: {
+      brain: _penaltyScore(brain),
+      skill: _penaltyScore(skill),
+      ops: _penaltyScore(ops),
+      meta: _penaltyScore(meta),
+    },
+    checks: tagged,
+  };
 }
 
 /**
@@ -2560,6 +2633,12 @@ export async function buildChecks(
   const fastMode = args.includes('--fast');
   const doFix = args.includes('--fix');
   const dryRun = args.includes('--dry-run');
+  // v0.41.19.0 — `--scope=brain` SKIPS the SKILL check group (which walks the
+  // filesystem `skills/` tree, the dominant non-DB cost). Defaults to `all`.
+  // `runResolverChecks`-equivalent invocations are gated below; the same gate
+  // covers `whoknows_health` (the one DB-dependent skill check) where it's
+  // invoked later in the function.
+  const scope: 'all' | 'brain' = args.includes('--scope=brain') ? 'brain' : 'all';
 
   const checks: Check[] = [];
   let autoFixReport: AutoFixReport | null = null;
@@ -2572,16 +2651,26 @@ export async function buildChecks(
 
   // --- Filesystem checks (always run, no DB needed) ---
 
-  // 1. Resolver health
-  // Use the same auto-detect as `check-resolvable` so doctor sees a
-  // workspace/skills dir reachable via $OPENCLAW_WORKSPACE or
-  // ~/.openclaw/workspace, not just a `skills/` walked up from cwd.
-  // Read-only variant adds the install-path fallback so a hosted-CLI install
-  // run from `~` (e.g., `bun install -g github:garrytan/gbrain && cd ~ &&
-  // gbrain doctor`) can still find the bundled skills/ dir without warning.
-  const detected = autoDetectSkillsDirReadOnly();
+  // 1. Resolver health + 2. Skill conformance + 2b. Skill brain-first.
+  //
+  // SKILL check group (gated behind --scope=all).
+  //
+  // The resolver walk reads every SKILL.md under the configured skills dir
+  // (`skills/RESOLVER.md` or workspace-root `AGENTS.md`). On large OpenClaw
+  // deployments with 200+ skills this is the dominant non-DB cost. The
+  // v0.41.19.0 `--scope=brain` flag skips this whole block per D9 in the plan.
+  //
+  // We also skip `--fix` execution under scope=brain because --fix
+  // exclusively targets DRY violations inside SKILL.md files. Use the same
+  // auto-detect as `check-resolvable` so doctor sees a workspace/skills dir
+  // reachable via $OPENCLAW_WORKSPACE or ~/.openclaw/workspace, not just a
+  // `skills/` walked up from cwd. Read-only variant adds the install-path
+  // fallback so a hosted-CLI install run from `~` (e.g., `bun install -g
+  // github:garrytan/gbrain && cd ~ && gbrain doctor`) can still find the
+  // bundled skills/ dir without warning.
+  const detected = scope === 'all' ? autoDetectSkillsDirReadOnly() : { dir: null, source: 'none' as const };
   const skillsDir = detected.dir;
-  if (skillsDir) {
+  if (scope === 'all' && skillsDir) {
 
     // --fix: run auto-repair BEFORE checkResolvable so the post-fix scan
     // reflects the new state. Auto-fix only targets DRY violations today;
@@ -2630,12 +2719,12 @@ export async function buildChecks(
       };
       checks.push(check);
     }
-  } else {
+  } else if (scope === 'all') {
     checks.push({ name: 'resolver_health', status: 'warn', message: 'Could not find skills directory' });
   }
 
-  // 2. Skill conformance
-  if (skillsDir) {
+  // 2. Skill conformance (SKILL group — gated)
+  if (scope === 'all' && skillsDir) {
     const conformanceResult = checkSkillConformance(skillsDir);
     checks.push(conformanceResult);
   }
@@ -2651,7 +2740,9 @@ export async function buildChecks(
   // snapshot.json. Writes one detected/resolved JSONL line per state
   // transition + one fixed line per applied --fix. Stable brain → zero
   // audit writes per doctor run.
-  if (skillsDir) {
+  //
+  // SKILL group — gated.
+  if (scope === 'all' && skillsDir) {
     checks.push(skillBrainFirstCheck(skillsDir));
   }
 
@@ -4161,8 +4252,11 @@ export async function buildChecks(
   // v0.33: whoknows_health — fixture presence + row count. The eval
   // gate itself runs via `gbrain eval whoknows`; this check is the
   // "did you do the assignment?" signal.
-  progress.heartbeat('whoknows_health');
-  checks.push(await whoknowsHealthCheck(engine));
+  // SKILL group — gated behind --scope=all (v0.41.19.0).
+  if (scope === 'all') {
+    progress.heartbeat('whoknows_health');
+    checks.push(await whoknowsHealthCheck(engine));
+  }
 
   // v0.36 cross-modal wave: modality column cleanup.
   //
@@ -5607,26 +5701,21 @@ export function skillBrainFirstCheck(skillsDir: string): Check {
 }
 
 function outputResults(checks: Check[], json: boolean): boolean {
-  const hasFail = checks.some(c => c.status === 'fail');
-  const hasWarn = checks.some(c => c.status === 'warn');
-
-  // Compute composite health score (0-100)
-  let score = 100;
-  for (const c of checks) {
-    if (c.status === 'fail') score -= 20;
-    else if (c.status === 'warn') score -= 5;
-  }
-  score = Math.max(0, score);
+  // v0.41.19.0 — render goes through computeDoctorReport so the human
+  // output, JSON output, and remote MCP envelope all share one shape.
+  const report = computeDoctorReport(checks);
+  const hasFail = report.status === 'unhealthy';
+  const hasWarn = report.status === 'warnings';
+  const score = report.health_score;
 
   if (json) {
-    const status = hasFail ? 'unhealthy' : hasWarn ? 'warnings' : 'healthy';
-    console.log(JSON.stringify({ schema_version: 2, status, health_score: score, checks }));
+    console.log(JSON.stringify(report));
     return hasFail;
   }
 
   console.log('\nGBrain Health Check');
   console.log('===================');
-  for (const c of checks) {
+  for (const c of report.checks) {
     const icon = c.status === 'ok' ? 'OK' : c.status === 'warn' ? 'WARN' : 'FAIL';
     console.log(`  [${icon}] ${c.name}: ${c.message}`);
     if (c.issues) {
@@ -5637,12 +5726,30 @@ function outputResults(checks: Check[], json: boolean): boolean {
     }
   }
 
+  // v0.41.19.0 — brain-first headline. The user asked "is my brain ok?".
+  // Lead with the brain-category score; show the legacy aggregate
+  // alongside as context. The weighted BrainHealth.brain_score (data
+  // composition) is surfaced separately by the `brain_score` check above —
+  // it's read out of the check list so we don't duplicate the query.
+  const brainScoreCheck = report.checks.find((c) => c.name === 'brain_score');
+  const brainScoreLine = brainScoreCheck
+    ? `Weighted brain score: ${brainScoreCheck.status === 'ok' ? '' : `[${brainScoreCheck.status.toUpperCase()}] `}${brainScoreCheck.message}`
+    : null;
+
+  console.log('');
+  console.log(`Brain checks:  ${report.brain_checks_score}/100  (category penalty)`);
+  console.log(`Skill checks:  ${report.category_scores.skill}/100`);
+  console.log(`Ops checks:    ${report.category_scores.ops}/100`);
+  console.log(`Meta checks:   ${report.category_scores.meta}/100`);
+  if (brainScoreLine) console.log(brainScoreLine);
+  console.log('');
+
   if (hasFail) {
-    console.log(`\nHealth score: ${score}/100. Failed checks found.`);
+    console.log(`Overall health score: ${score}/100. Failed checks found.`);
   } else if (hasWarn) {
-    console.log(`\nHealth score: ${score}/100. All checks OK (some warnings).`);
+    console.log(`Overall health score: ${score}/100. All checks OK (some warnings).`);
   } else {
-    console.log(`\nHealth score: ${score}/100. All checks passed.`);
+    console.log(`Overall health score: ${score}/100. All checks passed.`);
   }
   return hasFail;
 }
