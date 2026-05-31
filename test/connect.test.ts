@@ -170,8 +170,12 @@ describe('redactToken', () => {
   test('replaces every occurrence', () => {
     expect(redactToken('a TOK b TOK', 'TOK')).toBe(`a ${REDACTED} b ${REDACTED}`);
   });
-  test('null token is a no-op', () => {
-    expect(redactToken('unchanged', null)).toBe('unchanged');
+  test('null token still scrubs Bearer-shaped values (defense in depth)', () => {
+    // Even without the literal token, a transformed Bearer echo is scrubbed.
+    expect(redactToken('failed: Bearer gbrain_xyz123', null)).toBe(`failed: Bearer ${REDACTED}`);
+  });
+  test('Bearer scrub catches a non-exact token echo', () => {
+    expect(redactToken('add failed near Bearer SOMETHINGELSE', 'tok')).toContain(`Bearer ${REDACTED}`);
   });
 });
 
@@ -284,6 +288,16 @@ describe('probeBrainIdentity (injected deps)', () => {
     const r = await probeBrainIdentity('https://h/mcp', 'TOK', { deps });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe('tool_error');
+  });
+  test('timeout timer fires → reason timeout (deterministic, no real sleep)', async () => {
+    const deps: ProbeDeps = {
+      connectAndCall: (_u, _t, signal) => new Promise((_res, rej) => {
+        signal.addEventListener('abort', () => rej(new Error('The operation was aborted')));
+      }),
+    };
+    const r = await probeBrainIdentity('https://h/mcp', 'TOK', { timeoutMs: 10, deps });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe('timeout');
   });
 });
 
@@ -470,5 +484,43 @@ describe('runConnect print mode', () => {
     const j = JSON.parse(r.out.join('\n'));
     expect(j.token_redacted).toBe(true);
     expect(r.out.join('\n')).not.toContain('gbrain_secret');
+  });
+
+  test('--help prints command-specific HELP, no exit', async () => {
+    const r = await runWithExitCapture(['--help'], installDeps());
+    expect(r.exitCode).toBeUndefined();
+    expect(r.out.join('\n')).toMatch(/gbrain connect/);
+  });
+
+  test('unknown --agent fails fast', async () => {
+    const r = await runWithExitCapture(['https://h/mcp', '--token', 't', '--agent', 'bogus'], installDeps());
+    expect(r.exitCode).toBe(1);
+    expect(r.err.join('\n')).toMatch(/Unknown --agent/);
+  });
+
+  test('invalid --name fails fast', async () => {
+    const r = await runWithExitCapture(['https://h/mcp', '--token', 't', '--name', 'Bad Name'], installDeps());
+    expect(r.exitCode).toBe(1);
+    expect(r.err.join('\n')).toMatch(/Invalid --name/);
+  });
+
+  test('bad URL exits 1 via the orchestrator', async () => {
+    const r = await runWithExitCapture(['brain.example.com:3131', '--token', 't'], installDeps());
+    expect(r.exitCode).toBe(1);
+  });
+
+  test('http non-local prints the plaintext-token warning but still proceeds', async () => {
+    const r = await runWithExitCapture(['http://brain.example.com/mcp', '--token', 't'], installDeps());
+    expect(r.exitCode).toBeUndefined();
+    expect(r.err.join('\n')).toMatch(/unencrypted/i);
+  });
+
+  test('invalid --timeout-ms falls back to the default (probe receives it)', async () => {
+    let seen = -1;
+    await runWithExitCapture(
+      ['https://h/mcp', '--token', 't', '--install', '--yes', '--timeout-ms', 'abc'],
+      installDeps({ probe: async (_u, _t, ms) => { seen = ms; return { ok: true, identity: 'ok' }; } }),
+    );
+    expect(seen).toBe(15000);
   });
 });

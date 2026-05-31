@@ -25,6 +25,14 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 
 export type ConnectProbeReason = 'auth' | 'unreachable' | 'timeout' | 'tool_error' | 'unknown';
 
+/** Default smoke-probe timeout. Single source of truth shared with connect.ts. */
+export const DEFAULT_PROBE_TIMEOUT_MS = 15_000;
+
+/** Shared auth-rejection matcher so the thrown-error and tool-error paths agree. */
+export function isAuthErrorMessage(message: string): boolean {
+  return /\b(401|403)\b|unauthor|invalid.token|forbidden/i.test(message);
+}
+
 export type ConnectProbeResult =
   | { ok: true; identity: string }
   | { ok: false; reason: ConnectProbeReason; message: string };
@@ -47,7 +55,7 @@ export interface ProbeDeps {
  */
 export function classifyProbeError(message: string): ConnectProbeReason {
   if (/timeout|abort/i.test(message)) return 'timeout';
-  if (/\b(401|403)\b|unauthor|invalid.token|forbidden/i.test(message)) return 'auth';
+  if (isAuthErrorMessage(message)) return 'auth';
   // undici/fetch + MCP SDK transport failures: DNS, ECONNREFUSED, TLS,
   // getaddrinfo, and the SDK's friendly "Unable to connect..." wrapper.
   if (/fetch failed|unable to connect|connection refused|failed to connect|could not connect|ENOTFOUND|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ETIMEDOUT|network|socket|tls|certificate/i.test(message)) {
@@ -103,12 +111,12 @@ export async function probeBrainIdentity(
 ): Promise<ConnectProbeResult> {
   const deps = opts.deps ?? DEFAULT_DEPS;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error('timeout')), opts.timeoutMs ?? 15_000);
+  const timer = setTimeout(() => controller.abort(new Error('timeout')), opts.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS);
   try {
     const res = await deps.connectAndCall(mcpUrl, token, controller.signal);
     if (res.isError) {
       const message = extractResultText(res.content) || 'unknown tool error';
-      const reason = /\b(401|403)\b|unauthor|forbidden/i.test(message) ? 'auth' : 'tool_error';
+      const reason = isAuthErrorMessage(message) ? 'auth' : 'tool_error';
       return { ok: false, reason, message };
     }
     const identity = extractResultText(res.content);

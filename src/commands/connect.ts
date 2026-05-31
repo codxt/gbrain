@@ -20,14 +20,16 @@
 
 import { execFileSync } from 'child_process';
 import type { ConnectProbeResult } from '../core/connect-probe.ts';
-import { probeBrainIdentity } from '../core/connect-probe.ts';
+import { probeBrainIdentity, DEFAULT_PROBE_TIMEOUT_MS } from '../core/connect-probe.ts';
+import { promptLine } from '../core/cli-util.ts';
 
 export const ENV_VAR = 'GBRAIN_REMOTE_TOKEN';
 export const PLACEHOLDER_TOKEN = '<paste-your-token>';
 export const REDACTED = '***';
 export const DEFAULT_NAME = 'gbrain';
 const NAME_RE = /^[a-z0-9][a-z0-9_-]*$/;
-const DEFAULT_TIMEOUT_MS = 15_000;
+// Single source of truth shared with the probe (was a duplicated 15_000 literal).
+const DEFAULT_TIMEOUT_MS = DEFAULT_PROBE_TIMEOUT_MS;
 
 export const LEARN_INSTRUCTION =
   'Once connected, call the `get_brain_identity` tool (whose brain this is), then ' +
@@ -168,8 +170,12 @@ export function claudeMcpAddCmdString(argv: string[]): string {
 }
 
 export function redactToken(s: string, token: string | null): string {
-  if (!token) return s;
-  return s.split(token).join(REDACTED);
+  // Exact-substring scrub of the known token, plus a defense-in-depth pass over
+  // any `Bearer <value>` shape the SDK/CLI might echo in a transformed form the
+  // exact match would miss. Both run on the --install error paths only.
+  let out = token ? s.split(token).join(REDACTED) : s;
+  out = out.replace(/Bearer\s+\S+/gi, `Bearer ${REDACTED}`);
+  return out;
 }
 
 export function buildConnectBlock(p: { agent: 'claude-code' | 'generic'; name: string; url: string; token: string | null }): string {
@@ -232,19 +238,11 @@ export interface ConnectDeps {
   probe(url: string, token: string, timeoutMs: number): Promise<ConnectProbeResult>;
 }
 
-function defaultPromptYesNo(question: string): Promise<boolean> {
-  process.stdout.write(`${question} (y/N): `);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const stdin = process.stdin as any;
-  stdin.setEncoding?.('utf8');
-  return new Promise<boolean>((resolve) => {
-    const onData = (chunk: string) => {
-      const answer = chunk.trim().toLowerCase();
-      stdin.off?.('data', onData);
-      resolve(answer === 'y' || answer === 'yes');
-    };
-    stdin.on?.('data', onData);
-  });
+async function defaultPromptYesNo(question: string): Promise<boolean> {
+  // Reuse the shared prompt helper so stdin pause/resume lifecycle matches the
+  // rest of the interactive CLI flows (init, apply-migrations, ...).
+  const answer = (await promptLine(`${question} (y/N): `)).toLowerCase();
+  return answer === 'y' || answer === 'yes';
 }
 
 function defaultRunClaude(argv: string[]): { code: number; stdout: string; stderr: string } {
