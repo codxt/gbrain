@@ -11,7 +11,7 @@ import type { GBrainConfig } from './config.ts';
 import type { PageType } from './types.ts';
 import { importFromContent } from './import-file.ts';
 import { writePageThrough } from './write-through.ts';
-import { hybridSearch, hybridSearchCached } from './search/hybrid.ts';
+import { hybridSearch, hybridSearchCached, stampContentFlags } from './search/hybrid.ts';
 import { expandQuery } from './search/expansion.ts';
 import { dedupResults } from './search/dedup.ts';
 import { captureEvalCandidate, isEvalCaptureEnabled, isEvalScrubEnabled } from './eval-capture.ts';
@@ -20,6 +20,7 @@ import { extractPageLinks, isAutoLinkEnabled, isAutoTimelineEnabled, parseTimeli
 import { isFactsBackstopEligible } from './facts/eligibility.ts';
 import { stripTakesFence } from './takes-fence.ts';
 import { stripFactsFence } from './facts-fence.ts';
+import { getContentFlag } from './quarantine.ts';
 import { bumpLastRetrievedAt } from './last-retrieved.ts';
 import { isSearchMode } from './search/mode.ts';
 import { stampEvidence } from './search/evidence.ts';
@@ -589,7 +590,18 @@ const get_page: Operation = {
           ),
         }
       : page;
-    return { ...visibleBody, tags, ...(resolved_slug ? { resolved_slug } : {}) };
+    // v0.42 (#1699) agent-warning channel: surface the page's content_flag
+    // marker as a top-level field (parallel to SearchResult.content_flag) so
+    // an agent reading a page directly gets the same "this looks odd, examine
+    // it" signal it would get from search. The marker is also in frontmatter;
+    // this is the clean, documented accessor.
+    const content_flag = getContentFlag(page.frontmatter as Record<string, unknown> | null);
+    return {
+      ...visibleBody,
+      tags,
+      ...(resolved_slug ? { resolved_slug } : {}),
+      ...(content_flag ? { content_flag } : {}),
+    };
   },
   scope: 'read',
   cliHints: { name: 'get', positional: ['slug'] },
@@ -708,6 +720,10 @@ const put_page: Operation = {
     }
     const result = await importFromContent(ctx.engine, slug, p.content as string, {
       noEmbed,
+      // v0.42 (#1699): untrusted callers can't smuggle gate-owned frontmatter
+      // markers (quarantine/content_flag/embed_skip). Fail-closed — anything
+      // not strictly local is remote (matches CV6 / v0.26.9 F7b posture).
+      remote: ctx.remote !== false,
       ...(ctx.sourceId ? { sourceId: ctx.sourceId } : {}),
       // v0.39.0.0 T1.5: pack-aware type inference (loaded above; legacy
       // inferType behavior when undefined).
@@ -1275,6 +1291,10 @@ const search: Operation = {
       const raw = await ctx.engine.searchKeyword(queryText, { limit, offset, ...scope });
       const results = dedupResults(raw);
       stampEvidenceSafe(results);
+      // #1699: the keyword-only opt-out must STILL surface the content_flag
+      // agent-warning channel (hybridSearch stamps it; this branch bypasses
+      // hybridSearch, so stamp explicitly). Fail-open inside the helper.
+      await stampContentFlags(ctx.engine, results);
       bumpLastRetrievedAt(ctx.engine, results.map((r) => r.page_id));
       maybeCaptureSearch(ctx, queryText, results, Date.now() - startedAt, false);
       return results;
@@ -1670,6 +1690,11 @@ const think: Operation = {
       save: safeSave,
       take: safeTake,
       model: p.model ? String(p.model) : undefined,
+      // #1698 (C3): a remote caller that explicitly supplies a model gets the same
+      // hard-error-on-unresolvable behavior as the CLI (loud op error envelope),
+      // instead of silently degrading to a no-LLM stub answer. No model param →
+      // false → configured/default model keeps its graceful path.
+      modelExplicit: !!p.model,
       since: p.since ? String(p.since) : undefined,
       until: p.until ? String(p.until) : undefined,
       takesHoldersAllowList: ctx.takesHoldersAllowList,
@@ -1690,7 +1715,9 @@ const think: Operation = {
 
     return {
       ...result,
-      saved_slug: savedSlug ?? null,
+      // #1698 (#10): the persist-skip signal returns slug '' — map it (and any
+      // falsy) to null so callers never see an empty-string "slug".
+      saved_slug: savedSlug || null,
       evidence_inserted: evidenceInserted,
       remote_persisted_blocked: remote && (Boolean(p.save) || Boolean(p.take)),
     };
