@@ -2,6 +2,47 @@
 
 All notable changes to GBrain will be documented in this file.
 
+## [0.42.17.0] - 2026-06-03
+
+**A huge `gbrain sync` can no longer get stuck forever losing all its progress when it's killed partway through.** If your brain suddenly grows by tens of thousands of pages (say a background process is enriching one page per commit, all night long), the next sync has a giant backlog to import. If that sync gets killed before it finishes — a session timeout, a laptop sleep, anything — it used to throw away **everything** it had done and start over from zero. The next hour the backlog was even bigger, so it got killed again, and again. It could never catch up. This release makes sync **resumable**: a killed sync banks what it imported, and the next run picks up where it left off. It converges.
+
+Two related things were quietly making it worse, both fixed here:
+
+- **Sync used to give up the moment a new commit landed during the run.** If something else was committing to the same repo while sync worked (exactly the "enriching all night" case), sync saw the moving target and aborted with "blocked." Now sync locks onto a fixed target snapshot, drains to it, and lets the new commits land in the next run. Normal forward progress no longer blocks anything.
+- **A big sync would hammer your database connection pool.** On a small pooler (Supabase's 20-client default) a single sync could exhaust the slots and starve its own retries. New opt-in `GBRAIN_MAX_CONNECTIONS` caps a sync's footprint, and `gbrain doctor` nudges you to lower `GBRAIN_POOL_SIZE` when the math doesn't fit.
+
+You don't have to do anything — `gbrain sync` is resumable by default. Two knobs if you want them:
+
+```
+# How often progress is banked (files between checkpoint flushes; default 1000)
+export GBRAIN_SYNC_CHECKPOINT_EVERY=1000
+
+# Cap a single sync's DB connections on a low-cap pooler (opt-in; off by default)
+export GBRAIN_MAX_CONNECTIONS=16
+```
+
+What you'd see on a 44,000-file backlog, killed at 16% three times:
+
+| | Before | After |
+|---|---|---|
+| Progress kept after a kill | 0% (full re-walk) | banked up to the last checkpoint |
+| New commits during the sync | blocks the whole run | ignored this run, picked up next run |
+| Does it ever finish? | no — backlog outran every attempt | yes — each run banks real progress |
+
+Things to know about: the sync bookmark (`last_commit`) still only advances when the import fully completes, so a killed sync correctly looks "stale" and gets retried. For large syncs, link/timeline/embedding extraction is deferred to the resumable `gbrain extract --stale` / `gbrain embed --stale` sweeps (and the autopilot cycle) instead of running inline — that keeps a 44K-page extraction pass from re-blocking the import. Small syncs are unchanged: they still extract and embed inline.
+
+### Itemized changes
+
+- **Resumable incremental sync (`src/commands/sync.ts`).** `performSyncInner` now drives the import loop against a **pinned target commit** held in a DB checkpoint (`op_checkpoints`, two rows keyed by `syncFingerprint(sourceId, lastCommit)`). Each batch of imported files is flushed to the checkpoint; a killed/aborted/blocked run banks the completed set and leaves `last_commit` unchanged. The next run resume-filters the diff against the banked set and continues. `last_commit` (and `last_sync_at`) advance only at full import completion, then both checkpoint rows clear.
+- **Pinned target eliminates the staleness window.** The checkpoint pins the target commit at the first run and drains `lastCommit..pin`; completion advances to the pin (not live HEAD), so commits landing after the pin are a clean next-sync diff and never get skipped. A history rewrite (pin no longer an ancestor of HEAD) discards the checkpoint and re-pins.
+- **Forward-progress head gate.** The pre-existing strict "HEAD == captured" head-drift gate (which blocked on any concurrent commit) is replaced by a pin-reachability check: forward progress is safe; only a real rewrite blocks.
+- **`commitTimeMs(localPath, sha)`** added to `src/core/source-health.ts` — stamps `newest_content_at` against the pinned commit.
+- **`syncFingerprint({ sourceId, lastCommit })`** added to `src/core/op-checkpoint.ts` — keyed on the anchor (never HEAD) so the checkpoint survives a growing backlog.
+- **Connection-budget clamp (`src/core/sync-concurrency.ts`).** New `resolveMaxConnections()` + `clampWorkersForConnectionBudget()`; opt-in via `GBRAIN_MAX_CONNECTIONS`, no-op when unset (existing brains unchanged). `gbrain doctor` gains a `pool_budget` check that warns when the parent pool leaves no room for a worker.
+- **Vanished-on-disk added files are skipped, not failed.** A file added in the diff but deleted from disk by a commit after the pin (normal forward delete) is skipped and checkpointed instead of blocking the run.
+- **Cleaner single-flight backpressure.** `performSync` throws a typed `SyncLockBusyError`; the Minion `sync` handler catches it and marks the job *skipped* (not failed), so a cron/autopilot tick that hits a held lock defers to the holder without polluting the failed-job/crash metrics.
+- **Tests.** `test/sync-resumable-import.serial.test.ts` (13 cases): convergence regression, resume-skips-checkpointed, pinned-target/forward-drift, history-rewrite re-pin, `last_sync_at` not bumped on a blocked run + good-file banking, vanished-file skip, dry-run/empty-diff, plus pure-helper coverage for the fingerprint, clamp, and pool-budget math.
+
 ## [0.42.10.0] - 2026-06-02
 
 **Wikilinks like `[[struktura]]` that point at pages in another folder finally connect.** Until now, if you wrote `[[struktura]]` in `concepts/knowledge-graph.md` and the actual page lived at `projects/struktura.md`, GBrain silently dropped the link from its graph. Obsidian users saw a dense web of connections in their vault and a thin, broken graph inside GBrain. The issue reporter had 71 wikilinks across 20 pages — GBrain captured 12.
