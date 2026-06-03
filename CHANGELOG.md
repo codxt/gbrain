@@ -2,7 +2,7 @@
 
 All notable changes to GBrain will be documented in this file.
 
-## [0.42.12.0] - 2026-06-02
+## [0.42.16.0] - 2026-06-02
 
 **`gbrain doctor` now tells you the brain is OOM-looping in one line, ranks every
 problem by root cause, auto-drains stuck atom backlogs, and flags a thrashing DB
