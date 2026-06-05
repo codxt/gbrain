@@ -18,6 +18,8 @@ import { PGLiteEngine } from '../../src/core/pglite-engine.ts';
 import type { ChunkInput, SearchResult } from '../../src/core/types.ts';
 import type { BrainEngine } from '../../src/core/engine.ts';
 import { hasDatabase, setupDB, teardownDB, getEngine } from './helpers.ts';
+import { operationsByName } from '../../src/core/operations.ts';
+import type { OperationContext } from '../../src/core/operations.ts';
 
 const SKIP_PG = !hasDatabase();
 const describeBoth = SKIP_PG ? describe.skip : describe;
@@ -517,5 +519,47 @@ describeBoth('Engine parity — Postgres vs PGLite', () => {
     expect(slugs.indexOf('ep/ec-alice')).toBeLessThan(slugs.indexOf('ep/ec-bob'));
     expect(slugs.indexOf('ep/ec-bob')).toBeLessThan(slugs.indexOf('companies/ec-widget'));
     expect(pg.find((r) => r.slug === 'ep/ec-alice')!.inbound_count).toBe(2);
+  });
+
+  // idea_lineage parity (TEN4A): the op is handler-orchestrated (no engine
+  // method), so parity = the composed op returns the same DETERMINISTIC
+  // evidence on both engines. We assert resolved anchor + related slugs +
+  // timeline dates (resolveSlugs / backlinks / graph / timeline are pure SQL).
+  // Vector recall (`matches`) is intentionally NOT set-equal — it depends on
+  // embedding fixtures + HNSW and is covered loosely by the searchVector test.
+  test('idea_lineage: deterministic evidence parity across engines', async () => {
+    const A = 'concepts/il-parity-anchor';
+    const NOTE = 'originals/il-parity-note';
+    const BRANCH = 'concepts/il-parity-branch';
+    const OUT = 'concepts/il-parity-related';
+    for (const eng of [pgEngine, pgliteEngine]) {
+      await eng.putPage(A, { type: 'concept', title: 'IL Parity Anchor', compiled_truth: 'anchor body', timeline: '' });
+      await eng.putPage(NOTE, { type: 'note', title: 'IL Parity Note', compiled_truth: 'note body', timeline: '' });
+      await eng.putPage(BRANCH, { type: 'concept', title: 'IL Parity Branch Variant', compiled_truth: 'branch body', timeline: '' });
+      await eng.putPage(OUT, { type: 'concept', title: 'IL Parity Related', compiled_truth: 'related body', timeline: '' });
+      await eng.addLink(NOTE, A, 'first mention', 'mentions', 'markdown');
+      await eng.addLink(BRANCH, A, 'rejected', 'mentions', 'markdown');
+      await eng.addLink(A, OUT, 'relates', 'relates_to', 'markdown');
+      await eng.addTimelineEntry(A, { date: '2026-01-05', source: '', summary: 'first', detail: '' });
+    }
+
+    const mkCtx = (eng: BrainEngine): OperationContext => ({
+      engine: eng, config: {} as never,
+      logger: { info: () => {}, warn: () => {}, error: () => {} } as never,
+      dryRun: false, remote: false, sourceId: 'default',
+    } as OperationContext);
+
+    const op = operationsByName['idea_lineage'];
+    const pg = await op.handler(mkCtx(pgEngine), { idea: 'IL Parity Anchor' }) as any;
+    const pl = await op.handler(mkCtx(pgliteEngine), { idea: 'IL Parity Anchor' }) as any;
+
+    expect(pg.resolved).toBe(A);
+    expect(pl.resolved).toBe(pg.resolved);
+    const relSlugs = (r: any) => r.related.map((x: { slug: string }) => x.slug).sort();
+    expect(new Set(relSlugs(pg))).toEqual(new Set([NOTE, BRANCH, OUT]));
+    expect(relSlugs(pl)).toEqual(relSlugs(pg));
+    const tlDates = (r: any) => r.timeline.map((t: { date: string }) => t.date).sort();
+    expect(tlDates(pg)).toEqual(['2026-01-05']);
+    expect(tlDates(pl)).toEqual(tlDates(pg));
   });
 });
