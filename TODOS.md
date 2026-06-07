@@ -1,5 +1,28 @@
 # TODOS
 
+## #1737 minion fair-scheduling follow-up (v0.43+)
+
+Filed during the #1737 wave (`/plan-eng-review` decision F7, codex outside-voice
+line 5 + Claude review agreeing). The wave shipped honest attempt accounting,
+cooperative abort-honoring (the daily cycle-wedge fix), and per-handler default
+timeouts. Slot reservation was deliberately deferred.
+
+- [ ] **P3 — Reserve a concurrency slot for short lanes so long jobs can't starve
+  fresh ones.** Today the worker claim loop (`src/core/minions/worker.ts` claim
+  loop) pulls from a single pool ordered by `priority, created_at` — N long
+  `subagent`/`embed-backfill`/`autopilot-cycle` jobs can occupy all slots while a
+  freshly-submitted short job waits (#1737's "fresh subagent never claimed"
+  half). **Why deferred:** now that abort is honored (this wave), a timed-out job
+  actually stops and frees its slot, so most of the observed starvation should
+  evaporate. **MEASURE FIRST:** before building reservation, confirm starvation
+  still reproduces with abort-honoring live (submit a short job alongside 3 long
+  ones at `--concurrency 3`; check it gets claimed). Reserving a slot is overfit
+  (breaks at `--concurrency 1`; can starve long work under continuous short
+  traffic), so only build it if the measurement shows a real residual problem.
+  **Shape if needed:** when all-but-one in-flight slot is held by long-lane
+  handler names, restrict the next `claim()` to non-long names via the existing
+  `name = ANY($4)` filter in `queue.ts:claim`. No new table/migration.
+
 ## v0.42.21.0 module-singleton ownership follow-ups (v0.42+)
 
 Filed from the v0.42.21.0 wave (#1404/#1471/#1619 — the dream-cycle
