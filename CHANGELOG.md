@@ -2,6 +2,24 @@
 
 All notable changes to GBrain will be documented in this file.
 
+## [0.42.34.0] - 2026-06-07
+
+**Relationship questions now get relationship answers.** Ask "who invested in widget-co", "who introduced me to alice-example", or "what connects fund-a and fund-b" and gbrain resolves the named entity and walks its typed-edge graph (`invested_in`, `works_at`, `founded`, `attended`, `advises`, …) to surface the answer — even when no single page mentions both sides. Until now the graph only re-ranked results that keyword/vector search had already found; a relationship that lived purely in the edges (an investor whose page never names the company) was invisible. It now enters retrieval as a first-class candidate.
+
+This is on by default in the `balanced` and `tokenmax` search modes, a pure no-op for non-relational questions and for brains with no typed edges, and off in `conservative`. On a benchmark of relationship queries whose answers are unreachable by content similarity, recall@10 goes from near-zero to over 75%. The traversal is deterministic (same query + brain → same answer), stays within a single source (it never crosses a mounted-brain boundary), excludes noisy body-text "mentions" edges by default, and is depth- and fan-out-bounded so a popular hub entity can't blow up a query.
+
+### Added
+- **Typed-edge relational retrieval** (`search.relational_retrieval`, on for balanced/tokenmax). Relational questions resolve their seed entity and traverse the typed-edge graph, injecting edge-derived answers as a fourth fusion arm alongside keyword + vector. Relation vocabulary is schema-pack-extensible: a pack that defines its own link types can declare the query phrases that retrieve them. The `query` operation gains a `relational` flag (omit for the smart default; pass `false` to force lexical/vector-only). Results carry `--explain` attribution ("surfaced via invested_in from widget-co") and, for "what connects A and B", the connecting path.
+- **`relationalFanout` engine method** (PGLite + Postgres, in lockstep). Seed-array typed-edge fan-out aggregating to ranked nodes (shortest hop, edge richness, connecting path, canonical chunk), source-scoped and deterministic.
+- **`gbrain eval retrieval-quality --ab-relational`**: A/Bs the arm off vs on over a question set and reports the recall@10 lift + latency. The retrieval-quality harness gains recall@k / recall@10 metrics.
+
+### Fixed
+- **Cross-source result collapse.** The search fusion/dedup key now carries `source_id`, so two pages that share a slug across mounted brains no longer merge into one result. The semantic query cache is likewise scoped per source-set, so a federated search can't be served a single-source cached result.
+
+### To take advantage of v0.42.34.0
+- Just ask relationship questions in natural language — the arm is on by default in balanced/tokenmax. To turn it off: `gbrain config set search.relational_retrieval false`.
+- One-time cache note: this release advances the search-cache key version (a relational-on result must not be served to a relational-off lookup), so the first query after upgrade re-runs instead of hitting a stale cache row. No action needed; it self-heals on first use.
+
 ## [0.42.29.0] - 2026-06-07
 
 **The background-job queue stops thrashing on long jobs, the cycle stops wedging itself, and you can no longer run two supervisors against one queue by accident.** Three fixes plus a voice-agent feature.
