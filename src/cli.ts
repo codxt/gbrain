@@ -881,7 +881,8 @@ async function makeContext(engine: BrainEngine, params: Record<string, unknown>)
   };
 }
 
-function formatResult(opName: string, result: unknown): string {
+// Exported for tests (same import-safety contract as cliAliases/printOpHelp).
+export function formatResult(opName: string, result: unknown): string {
   switch (opName) {
     case 'volunteer_context': {
       const r = result as any;
