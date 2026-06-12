@@ -198,6 +198,120 @@ describe('holdout discipline (decision 22)', () => {
   }, 60_000);
 });
 
+describe('file-vs-file --compare (pure diff, no run, no DB)', () => {
+  test('identical files: exit 0 with a JSON outcome on stdout', () => {
+    const b = join(root, 'base1.json');
+    const r = run(['--compare', b, b]);
+    expect(r.exitCode).toBe(0);
+    const outcome = JSON.parse(r.stdout);
+    expect(outcome.verdict).toBe('pass');
+  }, 30_000);
+
+  test('doctored current vs base: exit 1 with breaches listed', () => {
+    const r = run(['--compare', join(root, 'doctored.json'), join(root, 'base1.json')]);
+    // base1 (current) has MORE failures than doctored (main pretends fewer)…
+    // order: --compare BASE CURRENT → current=base1, main=doctored.
+    expect(r.exitCode).toBe(1);
+    const outcome = JSON.parse(r.stdout);
+    expect(outcome.verdict).toBe('regression');
+    expect(outcome.breaches.length).toBeGreaterThan(0);
+  }, 30_000);
+});
+
+describe('--json stdout completeness', () => {
+  test('stdout parses as a full result doc with compare embedded', () => {
+    // All harnesses: base1.json carries cells for all three seams, and a
+    // narrower run would (correctly) trip the disappeared-coverage breach.
+    const r = run([
+      '--fixtures', fixtures, '--gold', gold,
+      '--json',
+      '--compare', join(root, 'base1.json'),
+    ]);
+    expect(r.exitCode).toBe(0);
+    const doc = JSON.parse(r.stdout);
+    expect(doc.receipt.result_schema_version).toBe(1);
+    expect(doc.cells.length).toBeGreaterThan(0);
+    expect(doc.compare.verdict).toBe('pass');
+    expect(doc._meta.metric_glossary).toBeDefined();
+  }, 30_000);
+});
+
+describe('--llm availability gate', () => {
+  test('no config + no keys: exit 2 with an actionable message, before any run', () => {
+    const bareHome = mkdtempSync(join(tmpdir(), 'bb-home-'));
+    const env = { ...process.env, HOME: bareHome } as Record<string, string>;
+    delete env.ANTHROPIC_API_KEY;
+    delete env.CLAUDE_API_KEY;
+    delete env.OPENAI_API_KEY;
+    const proc = Bun.spawnSync(
+      ['bun', 'src/cli.ts', 'eval', 'brainbench', '--fixtures', fixtures, '--gold', gold, '--llm'],
+      { cwd: REPO, env, stdout: 'pipe', stderr: 'pipe' },
+    );
+    expect(proc.exitCode).toBe(2);
+    expect(proc.stderr.toString()).toContain('requires a configured chat model');
+  }, 30_000);
+});
+
+describe('render-brainbench-delta.ts (the CI step-summary block)', () => {
+  test('renders verdict header + per-cell headline from the --out artifact', () => {
+    const proc = Bun.spawnSync(['bun', 'scripts/render-brainbench-delta.ts', join(root, 'r1.json')], {
+      cwd: REPO, stdout: 'pipe', stderr: 'pipe',
+    });
+    expect(proc.exitCode).toBe(0);
+    const md = proc.stdout.toString();
+    expect(md).toContain('## BrainBench:');
+    expect(md).toContain('| openclaw | production |');
+    expect(md).toContain('know_to_ask_failure_rate=');
+  }, 30_000);
+
+  test('missing path argument: exit 2 with usage', () => {
+    const proc = Bun.spawnSync(['bun', 'scripts/render-brainbench-delta.ts'], {
+      cwd: REPO, stdout: 'pipe', stderr: 'pipe',
+    });
+    expect(proc.exitCode).toBe(2);
+  }, 30_000);
+});
+
+describe('privacy guard violation branches (negative path)', () => {
+  test('a fixture with a real dollar amount + out-of-range year fails the scan', () => {
+    const dirty = mkdtempSync(join(tmpdir(), 'bb-privacy-'));
+    mkdirSync(join(dirty, 'fixtures'), { recursive: true });
+    mkdirSync(join(dirty, 'gold'), { recursive: true });
+    writeFileSync(
+      join(dirty, 'fixtures', 'leak.fixture.json'),
+      JSON.stringify({ turns: [{ text: 'They raised $50M back in 2019 for the series B' }] }),
+    );
+    const proc = Bun.spawnSync(['bash', 'scripts/check-synthetic-corpus-privacy.sh'], {
+      cwd: REPO,
+      env: { ...process.env, BRAINBENCH_PRIVACY_DIR: dirty },
+      stdout: 'pipe', stderr: 'pipe',
+    });
+    expect(proc.exitCode).toBe(1);
+    const out = proc.stdout.toString();
+    expect(out).toContain('explicit dollar amount');
+    expect(out).toContain('out-of-range year');
+  }, 30_000);
+});
+
+describe('run-all once-per-sweep semantics (decision 16)', () => {
+  test('--suites brainbench with TWO modes writes exactly ONE n/a record with cells', () => {
+    const outDir = mkdtempSync(join(tmpdir(), 'bb-runall-'));
+    const proc = Bun.spawnSync(
+      ['bun', 'src/cli.ts', 'eval', 'run-all', '--suites', 'brainbench', '--modes', 'conservative,balanced', '--output', outDir],
+      { cwd: REPO, env: { ...process.env }, stdout: 'pipe', stderr: 'pipe' },
+    );
+    expect(proc.exitCode).toBe(0);
+    const lines = readFileSync(join(outDir, 'eval-results.jsonl'), 'utf-8').trim().split('\n');
+    expect(lines.length).toBe(1); // NOT multiplied by the two modes
+    const record = JSON.parse(lines[0]);
+    expect(record.schema_version).toBe(3);
+    expect(record.suite).toBe('brainbench');
+    expect(record.mode).toBe('n/a');
+    expect(record.status).toBe('completed');
+    expect(Object.keys(record.params.cells).length).toBe(12);
+  }, 120_000);
+});
+
 describe('run-all wiring (decision 16) — full corpus, in-process', () => {
   test('runBrainBenchCore completes over the committed corpus with 12 cells', async () => {
     const { runBrainBenchCore } = await import('../src/commands/eval-brainbench.ts');

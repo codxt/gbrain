@@ -155,6 +155,22 @@ describe('corpus-bless mode (decision 4 — a PR cannot self-approve)', () => {
   });
 });
 
+describe('parseBaseline error paths (each names the offending file)', () => {
+  test('invalid JSON', () => {
+    expect(() => parseBaseline('{ nope', 'bad.json')).toThrow(/bad\.json: invalid JSON/);
+  });
+  test('wrong schema_version', () => {
+    expect(() => parseBaseline(JSON.stringify({ schema_version: 99 }), 'v99.json')).toThrow(
+      /v99\.json: schema_version must be 1/,
+    );
+  });
+  test('missing cells/counts', () => {
+    expect(() =>
+      parseBaseline(JSON.stringify({ schema_version: 1, fixtures_hash: 'x' }), 'partial.json'),
+    ).toThrow(/partial\.json: missing fixtures_hash\/cells\/counts/);
+  });
+});
+
 describe('renderScoreboardMarkdown', () => {
   test('deterministic output; seam column present; gate + breaches rendered', () => {
     const result: BrainBenchResult = {

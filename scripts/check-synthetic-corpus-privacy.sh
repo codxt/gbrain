@@ -97,7 +97,9 @@ done < <(find "$CORPUS_DIR" -name '*.md' -type f 2>/dev/null)
 # scenario-privacy rule (no real deal shapes / timelines, even anonymized)
 # lives in evals/brainbench/README.md and is review-enforced.
 # ---------------------------------------------------------------------------
-BB_DIR="evals/brainbench"
+# Env override exists for the negative-path test (test/eval-brainbench-e2e.test.ts)
+# — production callers never set it.
+BB_DIR="${BRAINBENCH_PRIVACY_DIR:-evals/brainbench}"
 if [ -d "$BB_DIR/fixtures" ]; then
   echo "[corpus-privacy] checking brainbench fixtures for explicit dollar amounts..."
   while IFS= read -r match; do

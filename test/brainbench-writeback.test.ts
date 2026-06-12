@@ -5,6 +5,11 @@
  * provenance read-back.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import {
+  __setChatTransportForTests,
+  __setEmbedTransportForTests,
+  type ChatResult,
+} from '../src/core/ai/gateway.ts';
 import { createBenchmarkBrain, resetTables } from '../src/eval/longmemeval/harness.ts';
 import type { PGLiteEngine } from '../src/core/pglite-engine.ts';
 import { loadCorpus } from '../src/eval/brainbench/fixtures.ts';
@@ -86,6 +91,45 @@ describe('runWriteBack (deterministic, production pipeline)', () => {
     expect(score.gold_failed).toBe(1);
     expect(score.metrics.write_back_fidelity).toBeCloseTo(2 / 3);
     expect(score.failed_items[0]).toContain('gold fact lost');
+  });
+
+  test('--llm branch: real-extractor lane emits extraction metrics (stubbed transport)', async () => {
+    await resetTables(engine);
+    await seedBrain(engine, wb.fixture);
+    // Stubbed chat transport plays the real extractor's role: one fact whose
+    // text carries one gold probe's keywords, so extraction metrics land
+    // strictly between 0 and 1 (partial recall, full precision).
+    __setChatTransportForTests(async (): Promise<ChatResult> => ({
+      text: JSON.stringify({
+        facts: [{
+          fact: 'Alice Example flagged the pricing model undercutting gross margin',
+          kind: 'belief',
+          entity: 'people/alice-example',
+          confidence: 1.0,
+          notability: 'high',
+        }],
+      }),
+      blocks: [],
+      stopReason: 'end',
+      usage: { input_tokens: 10, output_tokens: 10, cache_read_tokens: 0, cache_creation_tokens: 0 },
+      model: 'stub:stub',
+      providerId: 'stub',
+    }));
+    __setEmbedTransportForTests(
+      (async () => ({ embeddings: [Array.from({ length: 1536 }, () => 0.1)] })) as never,
+    );
+    try {
+      const score = await runWriteBack(engine, wb.fixture, wb.gold, { llm: true, budgetUsd: 1 });
+      expect(score.metrics.extraction_recall).toBeDefined();
+      expect(score.metrics.extraction_precision).toBeDefined();
+      // One of three gold facts survives via the stub → recall 1/3, precision 1.
+      expect(score.metrics.extraction_recall).toBeCloseTo(1 / 3);
+      expect(score.metrics.extraction_precision).toBe(1);
+      expect(score.stored_rows).toBeGreaterThan(0);
+    } finally {
+      __setChatTransportForTests(null);
+      __setEmbedTransportForTests(null);
+    }
   });
 
   test('multi-segment conversations extract per segment (the 45-min gap splits)', async () => {
