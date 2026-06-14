@@ -418,24 +418,22 @@ describe('windowTurnCount — knob edge semantics', () => {
 
   test('the env escape hatch is honored even when config is null (no config file / DB)', async () => {
     const { windowTurnCount } = await import('../src/core/context/reflex.ts');
-    const prev = process.env.GBRAIN_RETRIEVAL_REFLEX_WINDOW_TURNS;
-    try {
-      // loadConfig() returns null in a config-less environment (clean CI shard,
-      // no brain) and drops its env→config mapping — windowTurnCount must still
-      // read the env var directly, or the documented escape hatch is dead and
-      // the window silently defaults to 4.
-      process.env.GBRAIN_RETRIEVAL_REFLEX_WINDOW_TURNS = '1';
+    // loadConfig() returns null in a config-less environment (clean CI shard,
+    // no brain) and drops its env→config mapping — windowTurnCount must still
+    // read the env var directly, or the documented escape hatch is dead and
+    // the window silently defaults to 4. withEnv() (not raw process.env
+    // mutation) keeps the linter + isolation guard happy.
+    await withEnv({ GBRAIN_RETRIEVAL_REFLEX_WINDOW_TURNS: '1' }, async () => {
       expect(windowTurnCount(null)).toBe(1);
-      process.env.GBRAIN_RETRIEVAL_REFLEX_WINDOW_TURNS = '7';
+    });
+    await withEnv({ GBRAIN_RETRIEVAL_REFLEX_WINDOW_TURNS: '7' }, async () => {
       expect(windowTurnCount(null)).toBe(7);
       // Env wins over a config value too (env is the higher-precedence plane).
       expect(windowTurnCount({ retrieval_reflex_window_turns: 3 } as never)).toBe(7);
+    });
+    await withEnv({ GBRAIN_RETRIEVAL_REFLEX_WINDOW_TURNS: 'not-a-number' }, async () => {
       // Garbage env falls through to config / default, not a crash.
-      process.env.GBRAIN_RETRIEVAL_REFLEX_WINDOW_TURNS = 'not-a-number';
       expect(windowTurnCount(null)).toBe(4);
-    } finally {
-      if (prev === undefined) delete process.env.GBRAIN_RETRIEVAL_REFLEX_WINDOW_TURNS;
-      else process.env.GBRAIN_RETRIEVAL_REFLEX_WINDOW_TURNS = prev;
-    }
+    });
   });
 });
