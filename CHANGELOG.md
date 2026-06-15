@@ -49,6 +49,11 @@ complete operation catalog — both speak the verbs). Run `gbrain protocol confo
 to self-certify, and `gbrain protocol stats` to watch adoption. Memories your agent
 saves are readable by every agent connected to the brain by default; pass
 `visibility: "private"` for local-only facts.
+## [0.42.44.0] - 2026-06-13
+
+### Fixed
+
+- **Personal-brain tutorial points at the correct AlphaClaw site.** Step 4 of `docs/tutorials/personal-brain.md` ("Deploy via AlphaClaw on Render") linked to the wrong top-level domain, sending readers to a site that isn't the official AlphaClaw. The link now resolves to the right destination, so the deploy step works as written (gbrain#2165).
 
 ## [0.42.43.0] - 2026-06-12
 
