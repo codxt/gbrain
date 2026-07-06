@@ -38,6 +38,34 @@ Every scoreboard row carries a `seam` label: the `openclaw` row exercises the sh
 - CLI exit codes for the new command route through the shared write-fence + aliveness-grace exit seam, so PGLite's WASM exit-code stomping and Bun's exit-time stdout discard can't corrupt the CI contract.
 
 To take advantage of v0.44.0.0: run `gbrain eval brainbench` — no setup, no keys, no brain required. If it ever reports something broken after an upgrade, `bun evals/brainbench/generator/gen.ts` rebuilds the corpus byte-identically and `gbrain eval brainbench --update-baseline` re-derives the baseline from an actual run; both are safe to re-run any time.
+## [0.42.57.0] - 2026-07-02
+
+**PGLite incident fix: a busy `gbrain dream` (or `embed`) could have its data-directory lock stolen and get its brain corrupted beyond in-place repair. The lock will no longer be taken from a process that is alive, and an already-corrupted store now tells you exactly how to recover.**
+
+### Fixed
+- **A live PGLite holder is never stolen.** The data-directory lock used to be reaped if the holder's heartbeat went stale past a grace window. But the heartbeat runs on the JS event loop, which is blocked during long synchronous WASM imports/checkpoints, so a genuinely working `gbrain dream`/`embed` could look stale while fully alive. Reaping it let a second process open the same store and corrupt the catalog + pgvector extension (surfacing later as `relation "content_chunks" does not exist` / `type "vector" does not exist`, only recoverable by wipe-and-restore). The lock is now reaped only when the holder process is actually dead; a wedged-but-alive or PID-reused holder makes the acquire time out with a clear message naming the PID, instead of risking corruption.
+- **A corrupted PGLite store now explains how to recover.** When the store's catalog or pgvector extension can no longer load, the error names the cause and points at `gbrain reinit-pglite --embedding-model <id> --embedding-dimensions <N>` (or restoring a backup), instead of the unrelated "macOS WASM bug" hint. It also notes that deleting the lock dir or `postmaster.pid` does not fix it.
+
+### To take advantage of v0.42.57.0
+`gbrain upgrade`. No migration. New corruption is prevented going forward. A brain already corrupted by a prior concurrent open cannot be repaired in place; the upgraded error message walks you through `gbrain reinit-pglite` or restoring a backup.
+
+## [0.42.56.0] - 2026-07-02
+
+**Life Chronicle: gbrain gains a temporal spine. Meetings and transcripts project into a queryable timeline, entities carry a bi-temporal ontology (sourced, confidence-weighted properties that supersede over time), and a low-friction diary captures interiority — so an agent can reconstruct "what happened the week of X", answer "when did I last interact with Y", and see how an entity's role or stance changed, instead of re-deriving chronology from scratch every session.** Built entirely on existing primitives (pages, the `facts` table, `timeline_entries`) — no new datastore. Auto-emission is off by default; opt in per below.
+
+### Added
+- **Timeline events + reads.** Meetings/transcripts auto-emit `type:event` atoms (when·where·who·what) that project into a date index and backlink to the depth page. Query them with `gbrain day <date> [--week] [--narrative]`, `gbrain since <date> [--kind]`, `gbrain last-seen <entity>`, and `gbrain on-this-day`. Intra-day ordering, read-time hiding of deleted events, and source isolation throughout.
+- **Bi-temporal per-entity ontology.** An open-world, sourced, confidence-weighted property bag rides the existing `facts` table (new `dimension`/`value` columns). A new value supersedes the prior across a validity window, so `gbrain ontology <entity> [--asof <date>]` can time-travel; genuine two-source disagreement surfaces via `gbrain ontology-contradictions`; `gbrain ontology-dimensions` shows what the brain tracks about entities. Novel LLM-proposed dimensions quarantine until confirmed.
+- **Diary capture + agent orientation.** `gbrain capture --type diary` (and `--type event` with `--who/--what/--where/--kind`) for low-friction entries; `gbrain orient` hands an agent the recent timeline plus resolved-entity ontology in one zero-LLM payload. `gbrain chronicle-backfill` sweeps existing meetings into the timeline.
+- **Ambient temporal recall + proactive surfacing.** Temporal queries lift chronicle pages in search; `gbrain advisor` flags unresolved ontology conflicts and recent meetings missing from the timeline. A deterministic `gbrain eval chronicle` gates the feature (day-order, last-seen, supersession, contradiction, source isolation).
+- **Migrations v121 (event-projection column) + v122 (facts ontology columns).** Additive; legacy rows unchanged.
+
+### Security
+- **Interiority stays local.** Diary content and diary-sourced ontology are redacted from untrusted (remote/MCP) readers across reads, search, advisor, and orientation. Auto-emission runs only for trusted local writes.
+
+### To take advantage of v0.42.56.0
+`gbrain upgrade`, then `gbrain apply-migrations --yes` (or any command that opens the brain) to pick up v121/v122. Auto-emission is OFF by default: turn it on with `gbrain config set auto_chronicle true`, then `gbrain chronicle-backfill` to populate the timeline from existing meetings. Manual capture (`gbrain capture --type event/diary`) and every read surface work immediately. Closes #2390 (duplicate #2388).
+
 ## [0.42.55.0] - 2026-06-24
 
 **A security-hardening pass: routing dotfiles, the skills directory, page slugs, and large-file transcription are confined against multi-user-host and untrusted-input edge cases; dynamic OAuth client registration defaults to a consent-bearing grant; and a schema-lint migration brings existing brains to the fresh-install posture.** Several of these close community-reported gaps. Fresh installs were already covered; existing brains are brought to the same bar automatically on upgrade. If `gbrain doctor` flags anything afterward, its message names the object and the exact fix.
