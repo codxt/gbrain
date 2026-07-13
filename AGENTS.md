@@ -165,6 +165,31 @@ Stop and report instead of starting another agent when:
 - the same validation fails twice because of harness or environment problems;
 - repository ownership, source of truth, or placement remains unresolved.
 
+## Branch policy
+
+Work directly on the repository's default branch unless the user explicitly
+requests an isolated branch.
+
+Do not automatically create, switch, rename, rebase, or delete branches for
+normal tasks.
+
+Before writing:
+
+- identify the repository's actual default branch;
+- confirm the current checkout is that branch;
+- confirm the working tree state;
+- pull only with `--ff-only` when synchronization is required.
+
+The default branch is normally `main`. Use the repository's actual configured
+default where different; `gbrain-upstream` currently uses `master`.
+
+With uncommitted work present, preserve it before switching branches. Do not
+stash, reset, or move work between branches unless the user explicitly approves
+that operation.
+
+Use small commits, targeted validation, and frequent pushes to preserve
+recoverability when working directly on the default branch.
+
 ## Before shipping
 
 Easiest path: `bun run ci:local` runs the full CI gate inside Docker (gitleaks,
