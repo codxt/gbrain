@@ -101,6 +101,70 @@ writing or reviewing an operation, consult `src/core/operations.ts` for the cont
   [`./llms-full.txt`](./llms-full.txt) is the same map with core docs inlined for
   single-fetch ingestion.
 
+## Agent routing
+
+Keep simple or tightly coupled work on the main agent. The main agent owns
+initial diagnosis, task decomposition, integration, final judgment, and
+validation.
+
+Use `fast_scan` only for one materially ambiguous read-only question where
+independent context or stronger investigation is likely to prevent an
+incorrect implementation.
+
+Do not invoke `fast_scan` for:
+
+- locating a known file;
+- listing a known directory;
+- reading files already identified by the main agent;
+- repeating the main agent's repository inspection;
+- receiving the complete implementation task.
+
+Every `fast_scan` assignment must define:
+
+- one concrete question;
+- fixed repository, directory, or file scope;
+- explicit exclusions;
+- concise evidence requirements;
+- a stop condition.
+
+Use `routine_worker` once for a fixed implementation scope with explicit
+validation. Do not send it broad repository governance, architecture discovery,
+or unresolved placement decisions unless those are part of the assigned
+bounded task.
+
+Use `deep_worker` only for a named complex or high-risk blocker localized by
+the main agent. Do not invoke it as a general second implementation attempt.
+
+Invoke `advisor` only after targeted validation passes and only for
+consequential security, governance, tenant-isolation, deployment,
+canonical-write, migration, destructive-operation, or cross-repository
+changes. Use at most one advisor pass unless the user explicitly requests
+another.
+
+The advisor is read-only. Its findings are proposals, not authority. The main
+agent must verify material findings against repository evidence before applying
+corrections.
+
+Default workflow:
+
+main-agent diagnosis
+→ optional single fast_scan
+→ routine_worker implementation
+→ main-agent diff inspection
+→ conditional advisor
+→ bounded corrections
+→ final validation
+
+Do not run parallel write agents against overlapping files or responsibilities.
+
+Stop and report instead of starting another agent when:
+
+- a second implementation worker would be required;
+- advisor findings require architectural redesign outside the approved scope;
+- deferred scope becomes necessary;
+- the same validation fails twice because of harness or environment problems;
+- repository ownership, source of truth, or placement remains unresolved.
+
 ## Before shipping
 
 Easiest path: `bun run ci:local` runs the full CI gate inside Docker (gitleaks,
