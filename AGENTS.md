@@ -103,13 +103,14 @@ writing or reviewing an operation, consult `src/core/operations.ts` for the cont
 
 ## Agent routing
 
-Keep simple or tightly coupled work on the main agent. The main agent owns
-initial diagnosis, task decomposition, integration, final judgment, and
-validation.
+Keep simple or tightly coupled work on the main agent. The main Sol-medium
+agent owns diagnosis, architecture, governance reconciliation, canonical
+placement, repository ownership, integration, and final judgment.
 
-Use `fast_scan` only for one materially ambiguous read-only question where
-independent context or stronger investigation is likely to prevent an
-incorrect implementation.
+Use `fast_scan` with Luna xHigh only for one bounded read-only evidence question
+over fixed files or directories. It may locate, extract, compare, and report
+facts, but it must not decide architecture, placement, ownership, governance
+acceptance, or final implementation strategy.
 
 Do not invoke `fast_scan` for:
 
@@ -127,19 +128,20 @@ Every `fast_scan` assignment must define:
 - concise evidence requirements;
 - a stop condition.
 
-Use `routine_worker` once for a fixed implementation scope with explicit
-validation. Do not send it broad repository governance, architecture discovery,
-or unresolved placement decisions unless those are part of the assigned
-bounded task.
+Use `routine_worker` with Terra High once for normal implementation, tests,
+documentation, maintenance, and bounded multi-step fixes after scope and
+material decisions are resolved, with explicit validation. Do not send it broad
+repository governance, architecture discovery, or unresolved placement decisions.
 
-Use `deep_worker` only for a named complex or high-risk blocker localized by
-the main agent. Do not invoke it as a general second implementation attempt.
+Use `deep_worker`, which remains Sol High, only for a named complex or high-risk
+blocker localized by the main agent. Do not invoke it as a general second
+implementation attempt.
 
-Invoke `advisor` only after targeted validation passes and only for
-consequential security, governance, tenant-isolation, deployment,
-canonical-write, migration, destructive-operation, or cross-repository
-changes. Use at most one advisor pass unless the user explicitly requests
-another.
+Invoke `advisor`, which remains Sol High, read-only, and conditional, only after
+targeted validation passes and only for consequential security, governance,
+tenant-isolation, deployment, canonical-write, migration, destructive-operation,
+or cross-repository changes. Use at most one advisor pass unless the user
+explicitly requests another.
 
 The advisor is read-only. Its findings are proposals, not authority. The main
 agent must verify material findings against repository evidence before applying
